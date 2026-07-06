@@ -38,6 +38,14 @@
   .subtitle{ color: rgba(246,241,228,0.75); font-size: 14px; margin-top: 22px; margin-bottom: 20px; }
   .mode-badge{ display:inline-block; margin-left:10px; font-family:'JetBrains Mono',monospace; font-size:11px; font-weight:700; background:var(--bg); border:1px solid var(--border); border-radius:999px; padding:3px 10px; color:var(--muted); vertical-align:middle; }
   .mode-badge.is-admin{ background:var(--ball); color:var(--ink); border-color:var(--ball); }
+  .event-title-box{ display:flex; align-items:center; justify-content:center; gap:10px; background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:12px 18px; margin-bottom:20px; text-align:center; }
+  .event-title-box .event-title-text{ font-family:'Bebas Neue',sans-serif; font-size:24px; letter-spacing:0.5px; color:var(--ink); }
+  .event-title-box .event-title-text.placeholder{ color:var(--muted); font-family:'Inter',sans-serif; font-size:14px; font-style:italic; }
+  .top-player-panel{ background:linear-gradient(135deg, var(--gold), #9c7a24); border-radius:var(--radius); padding:26px 20px; text-align:center; color:#fff; }
+  .top-player-panel.empty{ background:var(--card); border:1px solid var(--border); color:var(--muted); padding:20px; }
+  .top-player-crown{ font-size:42px; line-height:1; margin-bottom:6px; }
+  .top-player-name{ font-family:'Bebas Neue',sans-serif; font-size:36px; letter-spacing:0.5px; line-height:1; }
+  .top-player-record{ font-family:'JetBrains Mono',monospace; font-size:13px; opacity:0.9; margin-top:6px; }
   .session-stats{ display:flex; gap:20px; }
   .session-stat{ font-family:'JetBrains Mono', monospace; text-align:right; font-size:12px; color: rgba(246,241,228,0.7); }
   .session-stat b{ display:block; font-size:22px; color: var(--bg); font-family:'Bebas Neue',sans-serif; letter-spacing:1px; }
@@ -222,6 +230,7 @@ function defaultState(){
   return {
     courts: [ {id:1, players:null, startedAt:null, gameNum:0, awaitingResult:false}, {id:2, players:null, startedAt:null, gameNum:0, awaitingResult:false} ],
     courtsTitle: 'On court',
+    eventTitle: '',
     queue: [],
     sittingOut: [],
     autoFill: true,
@@ -290,6 +299,7 @@ function migrateState(s){
   if(s.skillSeparationMode===undefined) s.skillSeparationMode = false;
   if(s.totalGamesPlayed===undefined) s.totalGamesPlayed = 0;
   if(s.courtsTitle===undefined || s.courtsTitle===null) s.courtsTitle = 'On court';
+  if(s.eventTitle===undefined || s.eventTitle===null) s.eventTitle = '';
   if(!s.dailyLog) s.dailyLog = {};
   const activePlayersForMigration = [...s.queue, ...s.courts.flatMap(c=>c.players||[])];
   const pausedPlayersForMigration = [...s.sittingOut];
@@ -720,6 +730,13 @@ function editCourtsTitle(){
   saveState(); render();
 }
 
+function editEventTitle(){
+  const next = prompt('Open Play title (shown to everyone, below the banner)', state.eventTitle || '');
+  if(next===null) return;
+  state.eventTitle = next.trim();
+  saveState(); render();
+}
+
 function exportPlayers(){
   const seen = new Map();
   [...state.queue, ...state.sittingOut, ...state.courts.flatMap(c=>c.players||[])].forEach(p=>{
@@ -1142,7 +1159,7 @@ function render(){
   const nextGroups = previewGroups(4);
   const nextGroupLabels = ['Next 4','2nd next 4','3rd next 4','4th next 4'];
   const nextBoardCard = (label, four)=>{
-    const body = `<div class="next-card-players">${four.map(p=>`<div class="next-player">${p.name}${(IS_ADMIN && p.skill)?`<span class="skill-tag">${p.skill.toFixed(1)}</span>`:''}</div>`).join('')}</div>`;
+    const body = `<div class="next-card-players">${four.map(p=>`<div class="next-player">${p.name}${(IS_ADMIN && p.skill)?`<span class="skill-tag">${p.skill.toFixed(1)}</span>`:''}<span class="record-badge" style="margin-left:auto;">${p.wins}-${p.losses}</span></div>`).join('')}</div>`;
     return `<div class="next-card ${label==='Next 4'?'is-first':''}"><div class="next-card-label">${label}</div>${body}</div>`;
   };
   const nextBoardHtml = nextGroups.length
@@ -1266,6 +1283,20 @@ function render(){
         return `<div class="leaderboard">${lbHeaderRowHtml}${chunk.map((p,i)=>lbRowHtml(p, colIdx*COL_SIZE+i+1)).join('')}</div>`;
       }).join('')}
     </div>` : `<div class="empty-note" style="padding:6px 0;">Add players to see the leaderboard.</div>`;
+
+  const topPlayerToday = (withGames.length && maxWins>0) ? withGames[0] : null;
+  const topPlayerTitle = topPlayerToday
+    ? (topPlayerToday.gender==='M' ? 'King' : topPlayerToday.gender==='F' ? 'Queen' : 'Top Player')
+    : '';
+  const topPlayerPanelHtml = `
+    <section class="label">Top Player of the Day</section>
+    <div class="top-player-panel ${topPlayerToday ? '' : 'empty'}">
+      ${topPlayerToday ? `
+        <div class="top-player-crown">👑</div>
+        <div class="top-player-name">${topPlayerTitle} ${topPlayerToday.name}</div>
+        <div class="top-player-record">${topPlayerToday.wins}-${topPlayerToday.losses} record · ${topPlayerToday.gamesPlayed} games played</div>
+      ` : `No results yet — play a few games to crown today's top player.`}
+    </div>`;
 
   const fillDisabled = state.courts.every(c=>c.players) || selectGroup().four===null;
 
@@ -1439,6 +1470,7 @@ function render(){
         </div>
       </div>
     </div>
+    ${topPlayerPanelHtml}
     ${incomeModalHtml}
     ${weeklyReportHtml}
   `;
@@ -1455,6 +1487,8 @@ function render(){
 
     <section class="label">Unpaid <span class="count-badge">${unpaidPlayers.length}</span></section>
     <div class="unpaid-panel">${unpaidHtmlReadOnly}</div>
+
+    ${topPlayerPanelHtml}
   `;
 
   app.innerHTML = `
@@ -1471,6 +1505,11 @@ function render(){
     <div class="subtitle">Automatic, fair rotation for doubles — every group is 4 players, skill-balanced when ratings are set.
       ${IS_ADMIN ? `<span class="mode-badge is-admin">✏️ Edit Mode</span>` : ''}
     </div>
+    ${(state.eventTitle || IS_ADMIN) ? `
+    <div class="event-title-box">
+      <span class="event-title-text ${state.eventTitle ? '' : 'placeholder'}">${state.eventTitle || 'Tap ✎ to set a title for today\u2019s open play'}</span>
+      ${IS_ADMIN ? `<button class="icon-btn" data-action="edit-event-title" title="Edit open play title">✎</button>` : ''}
+    </div>` : ''}
     ${IS_ADMIN ? adminBodyHtml : playerBodyHtml}
   `;
 
@@ -1551,6 +1590,7 @@ document.addEventListener('click', (e)=>{
     case 'shuffle': shuffleTeams(Number(id)); break;
     case 'edit': editPlayer(id); break;
     case 'edit-courts-title': editCourtsTitle(); break;
+    case 'edit-event-title': editEventTitle(); break;
     case 'toggle-paid': togglePaid(id); break;
     case 'toggle-paddle': togglePaddleRent(id); break;
     case 'toggle-gender': cycleGender(id); break;
