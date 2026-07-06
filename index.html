@@ -198,16 +198,37 @@ const LOGO_SRC = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAA4QAAAIrCAYAAAC3
 const STORAGE_KEY = 'pickleball-open-play-state';
 
 // ---------------- ADMIN / VIEW-ONLY MODE ----------------
-// Only links where ?admin=<the right key> hashes to ADMIN_KEY_HASH can make
-// changes. The raw key is never stored in this file — only its SHA-256 hash —
-// so viewing the page source (or a public repo) doesn't reveal it directly.
-const ADMIN_KEY_HASH = '923e1d8338070e764a40c83695a701e579aec73aa5e843fb39f5458bc861cb19';
+// Only links where ?admin=<the right key> hashes to the current admin password
+// hash can make changes. The raw password is never stored in this file or in
+// Firebase in plaintext — only its SHA-256 hash — so viewing the page source
+// (or the database) doesn't reveal it directly. The hash lives in synced state
+// so the admin can change the password from the app itself (see
+// changeAdminPassword below); this is the original password's hash, used as
+// the starting value and as a fallback before state has loaded.
+const DEFAULT_ADMIN_HASH = '923e1d8338070e764a40c83695a701e579aec73aa5e843fb39f5458bc861cb19';
 let IS_ADMIN = false;
 
 async function sha256Hex(text){
   const enc = new TextEncoder().encode(text);
   const buf = await crypto.subtle.digest('SHA-256', enc);
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+function currentAdminHash(){
+  return (state && state.adminPasswordHash) ? state.adminPasswordHash : DEFAULT_ADMIN_HASH;
+}
+
+function upsertDirectory(p){
+  if(!state.playerDirectory) state.playerDirectory = {};
+  const key = (p.name||'').trim().toLowerCase();
+  if(!key) return;
+  state.playerDirectory[key] = { name: p.name, skill: p.skill!=null?p.skill:null, gender: p.gender||null, feeCategory: p.feeCategory||'adult' };
+}
+
+function findInDirectory(name){
+  if(!state.playerDirectory) return null;
+  const key = (name||'').trim().toLowerCase();
+  return key ? (state.playerDirectory[key] || null) : null;
 }
 
 const ADMIN_SESSION_KEY = 'pp-admin-unlocked';
@@ -217,7 +238,7 @@ async function resolveAdminStatus(){
   if(provided){
     try{
       const hash = await sha256Hex(provided);
-      if(hash === ADMIN_KEY_HASH){
+      if(hash === currentAdminHash()){
         IS_ADMIN = true;
         try{ sessionStorage.setItem(ADMIN_SESSION_KEY, '1'); }catch(e){}
         return;
@@ -237,7 +258,7 @@ async function promptAdminLogin(){
   if(pw===null) return;
   try{
     const hash = await sha256Hex(pw);
-    if(hash === ADMIN_KEY_HASH){
+    if(hash === currentAdminHash()){
       IS_ADMIN = true;
       try{ sessionStorage.setItem(ADMIN_SESSION_KEY, '1'); }catch(e){}
       showToast('Admin unlocked');
@@ -248,6 +269,31 @@ async function promptAdminLogin(){
   }catch(e){
     showToast("Couldn't verify password on this browser");
   }
+}
+
+async function changeAdminPassword(){
+  const current = prompt('Enter the current admin password to confirm');
+  if(current===null) return;
+  let currentHash;
+  try{ currentHash = await sha256Hex(current); }catch(e){ showToast("Couldn't verify password on this browser"); return; }
+  if(currentHash !== currentAdminHash()){ showToast('Current password is incorrect — not changed'); return; }
+
+  const next = prompt('Enter the new admin password');
+  if(next===null) return;
+  if(!next.trim()){ showToast('Password cannot be blank — not changed'); return; }
+  const confirmNext = prompt('Re-enter the new admin password to confirm');
+  if(confirmNext===null) return;
+  if(confirmNext !== next){ showToast('Passwords did not match — not changed'); return; }
+
+  try{
+    state.adminPasswordHash = await sha256Hex(next.trim());
+  }catch(e){
+    showToast("Couldn't set the new password on this browser");
+    return;
+  }
+  saveState();
+  showToast('Admin password changed — update any shared admin links');
+  render();
 }
 
 function adminLogout(){
@@ -282,7 +328,10 @@ function defaultState(){
     skillSeparationMode: false,
     totalGamesPlayed: 0,
     gameDurationsMs: [],
-    dailyLog: {}
+    dailyLog: {},
+    adminPasswordHash: DEFAULT_ADMIN_HASH,
+    playerDirectory: {},
+    lastAutoStopDate: null
   };
 }
 
@@ -344,6 +393,9 @@ function migrateState(s){
   if(s.courtsTitle===undefined || s.courtsTitle===null) s.courtsTitle = 'On court';
   if(s.eventTitle===undefined || s.eventTitle===null) s.eventTitle = '';
   if(!s.dailyLog) s.dailyLog = {};
+  if(!s.adminPasswordHash) s.adminPasswordHash = DEFAULT_ADMIN_HASH;
+  if(!s.playerDirectory) s.playerDirectory = {};
+  if(s.lastAutoStopDate===undefined) s.lastAutoStopDate = null;
   const activePlayersForMigration = [...s.queue, ...s.courts.flatMap(c=>c.players||[])];
   const pausedPlayersForMigration = [...s.sittingOut];
   activePlayersForMigration.forEach(p=>{
@@ -398,6 +450,7 @@ async function loadState(){
       lastSeenJSON = JSON.stringify(state);
       stateRef.set(state);
     }
+    await resolveAdminStatus();
     syncReady = true;
     setSyncStatus('🟢 Live — synced ' + new Date().toLocaleTimeString());
     render();
@@ -643,6 +696,7 @@ function recordResult(courtId, winnerSide){
   }
 
   state.totalGamesPlayed += 1;
+  logGamePlayed();
   court.players = null; court.startedAt = null; court.awaitingResult = false;
 
   saveState();
@@ -673,15 +727,18 @@ function editPlayer(id){
       else showToast('Skill needs to be a number between 2.0 and 5.0');
     }
   }
+  upsertDirectory(p);
   saveState(); render();
 }
 
-function addPlayer(name, skill){
+function addPlayer(name, skill, feeCategory, gender){
   name = name.trim();
   if(!name) return;
   const now = Date.now();
-  state.queue.push({ id: uid(), name, gamesPlayed:0, wins:0, losses:0, skill: skill||null, lastResult:null, paid:false, paddleRent:false, gender:null, feeCategory:'adult', checkInAt: now, totalPlayMs: 0, joinedAt: now });
+  const player = { id: uid(), name, gamesPlayed:0, wins:0, losses:0, skill: skill||null, lastResult:null, paid:false, paddleRent:false, gender: gender||null, feeCategory: feeCategory||'adult', checkInAt: now, totalPlayMs: 0, joinedAt: now };
+  state.queue.push(player);
   logPlayerCheckIn(name);
+  upsertDirectory(player);
   saveState(); render();
 }
 
@@ -706,6 +763,7 @@ function cycleGender(id){
   const p = findPlayerAnywhere(id);
   if(!p) return;
   p.gender = p.gender===null ? 'M' : p.gender==='M' ? 'F' : null;
+  upsertDirectory(p);
   saveState(); render();
 }
 
@@ -718,6 +776,7 @@ function cycleFeeCategory(id){
   const oldAmt = feeAmount(p);
   p.feeCategory = p.feeCategory==='adult' ? 'student' : p.feeCategory==='student' ? 'free' : 'adult';
   if(p.paid) logIncomeDelta(feeAmount(p) - oldAmt);
+  upsertDirectory(p);
   saveState(); render();
 }
 
@@ -746,7 +805,8 @@ function todayKey(d){
 
 function ensureDailyEntry(key){
   if(!state.dailyLog) state.dailyLog = {};
-  if(!state.dailyLog[key]) state.dailyLog[key] = { playerNames: [], income: 0 };
+  if(!state.dailyLog[key]) state.dailyLog[key] = { playerNames: [], income: 0, gamesPlayed: 0 };
+  if(state.dailyLog[key].gamesPlayed===undefined) state.dailyLog[key].gamesPlayed = 0;
   return state.dailyLog[key];
 }
 
@@ -762,9 +822,32 @@ function logIncomeDelta(amount){
   entry.income += amount;
 }
 
+function logGamePlayed(){
+  ensureDailyEntry(todayKey()).gamesPlayed += 1;
+}
+
 
 function closeIncomeModal(){ showIncomeView = false; render(); }
 function closeWeeklyReport(){ showWeeklyReport = false; render(); }
+
+function closeOutDay(){
+  if(!state) return;
+  const activeCourtIds = state.courts.filter(c=>c.players).map(c=>c.id);
+  state.autoFill = false; // don't refill courts once the day is closing
+  activeCourtIds.forEach(id=> recordResult(id, null)); // skip score, finish, send players back to the queue
+
+  const key = todayKey();
+  const entry = ensureDailyEntry(key);
+  state.lastAutoStopDate = key;
+  saveState(); render();
+
+  const summary = "Game ended — all active games were stopped.\n\n"
+    + `Players checked in today: ${entry.playerNames.length}\n`
+    + `Games played today: ${entry.gamesPlayed}\n`
+    + `Income collected today: ₱${entry.income}`;
+  alert(summary);
+}
+
 
 function editCourtsTitle(){
   const next = prompt('Title for the On Court panel', state.courtsTitle || 'On court');
@@ -990,10 +1073,13 @@ function importPlayers(list){
   let count = 0;
   list.forEach(({name, skill}, i)=>{
     if(!name) return;
-    const cleanSkill = (skill!=null && !isNaN(skill)) ? Math.min(5, Math.max(2, skill)) : null;
+    const known = findInDirectory(name);
+    const cleanSkill = (skill!=null && !isNaN(skill)) ? Math.min(5, Math.max(2, skill)) : (known ? known.skill : null);
     const now = Date.now()+i;
-    state.queue.push({ id: uid(), name, gamesPlayed:0, wins:0, losses:0, skill: cleanSkill, lastResult:null, paid:false, paddleRent:false, gender:null, feeCategory:'adult', checkInAt: now, totalPlayMs: 0, joinedAt: now });
+    const player = { id: uid(), name, gamesPlayed:0, wins:0, losses:0, skill: cleanSkill, lastResult:null, paid:false, paddleRent:false, gender: known?known.gender:null, feeCategory: known?known.feeCategory:'adult', checkInAt: now, totalPlayMs: 0, joinedAt: now };
+    state.queue.push(player);
     logPlayerCheckIn(name);
+    upsertDirectory(player);
     count++;
   });
   if(!count){ showToast('No players found in that file'); return; }
@@ -1072,7 +1158,13 @@ function setCourtCount(n){
 
 function resetSession(){
   if(!confirm('Clear all players and courts and start a new session?')) return;
+  const keepDirectory = state.playerDirectory;
+  const keepDailyLog = state.dailyLog;
+  const keepAdminHash = state.adminPasswordHash;
   state = defaultState();
+  state.playerDirectory = keepDirectory || {};
+  state.dailyLog = keepDailyLog || {};
+  state.adminPasswordHash = keepAdminHash || DEFAULT_ADMIN_HASH;
   saveState(); render();
 }
 
@@ -1397,12 +1489,13 @@ function render(){
     const d = new Date();
     d.setDate(d.getDate()-i);
     const key = todayKey(d);
-    const entry = (state.dailyLog && state.dailyLog[key]) || { playerNames: [], income: 0 };
+    const entry = (state.dailyLog && state.dailyLog[key]) || { playerNames: [], income: 0, gamesPlayed: 0 };
     reportDays.push({
       key,
       label: d.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' }),
       players: entry.playerNames ? entry.playerNames.length : 0,
-      income: entry.income || 0
+      income: entry.income || 0,
+      gamesPlayed: entry.gamesPlayed || 0
     });
   }
   const busiestCount = Math.max(0, ...reportDays.map(d=>d.players));
@@ -1420,14 +1513,15 @@ function render(){
           <span>Last 7 days income: ₱${weekTotalIncome}</span>
         </div>
         <table class="income-table">
-          <thead><tr><th>Day</th><th style="text-align:right;">Players</th><th style="text-align:right;">Income</th></tr></thead>
+          <thead><tr><th>Day</th><th style="text-align:right;">Players</th><th style="text-align:right;">Games</th><th style="text-align:right;">Income</th></tr></thead>
           <tbody>
             ${reportDays.map(d=>`<tr ${d.players===busiestCount && busiestCount>0 ? 'style="background:rgba(199,162,39,0.15); font-weight:700;"' : ''}>
               <td>${d.label}${d.players===busiestCount && busiestCount>0 ? ' 👑' : ''}</td>
               <td class="num">${d.players}</td>
+              <td class="num">${d.gamesPlayed}</td>
               <td class="num">₱${d.income}</td>
             </tr>`).join('')}
-            <tr class="income-total-row"><td>Total</td><td class="num">${weekTotalPlayers}</td><td class="num">₱${weekTotalIncome}</td></tr>
+            <tr class="income-total-row"><td>Total</td><td class="num">${weekTotalPlayers}</td><td class="num">${reportDays.reduce((s,d)=>s+d.gamesPlayed,0)}</td><td class="num">₱${weekTotalIncome}</td></tr>
           </tbody>
         </table>
         <div style="font-size:12px; color:var(--muted); margin-top:14px; line-height:1.6;">
@@ -1449,6 +1543,8 @@ function render(){
       <button class="fill-btn" data-action="open-weekly-report">📊 Weekly Report</button>
       <button class="reset-btn" data-action="copy-view-link">🔗 Copy view-only link</button>
       <button class="reset-btn" data-action="admin-logout">🔒 Log out</button>
+      <button class="reset-btn" data-action="change-admin-password">🔑 Change admin password</button>
+      <button class="reset-btn" data-action="close-day">🏁 End Game</button>
       <label class="pill-toggle"><input type="checkbox" data-action="toggle-autofill" ${state.autoFill?'checked':''}> Auto-send next group when a court opens</label>
       <label class="pill-toggle"><input type="checkbox" data-action="toggle-balance" ${state.autoBalance?'checked':''}> Balance by games played</label>
       <label class="pill-toggle"><input type="checkbox" data-action="toggle-wl" ${state.winnersLosersMode?'checked':''}> Winners' line & losers' line</label>
@@ -1480,8 +1576,11 @@ function render(){
           <input type="file" id="import-file-input" accept=".json,.csv,.txt" style="display:none">
           <input type="file" id="import-all-data-file-input" accept=".csv,.txt" style="display:none">
         </div>
+        <datalist id="player-directory-list">
+          ${Object.values(state.playerDirectory||{}).sort((a,b)=>a.name.localeCompare(b.name)).map(p=>`<option value="${p.name}"></option>`).join('')}
+        </datalist>
         <form class="add-form" id="add-form">
-          <input type="text" id="name-input" placeholder="Player name" autocomplete="off">
+          <input type="text" id="name-input" list="player-directory-list" placeholder="Player name (start typing to find a returning player)" autocomplete="off">
           <select id="skill-input">
             <option value="">Unrated</option>
             <option value="2.0">2.0</option>
@@ -1491,6 +1590,16 @@ function render(){
             <option value="4.0">4.0</option>
             <option value="4.5">4.5</option>
             <option value="5.0">5.0</option>
+          </select>
+          <select id="fee-input">
+            <option value="adult">Adult</option>
+            <option value="student">Student</option>
+            <option value="free">Free</option>
+          </select>
+          <select id="gender-input">
+            <option value="">Gender: —</option>
+            <option value="M">Male</option>
+            <option value="F">Female</option>
           </select>
           <button type="submit">Add</button>
         </form>
@@ -1542,9 +1651,10 @@ function render(){
         <img class="logo-img" src="${LOGO_SRC}" alt="Picklers Paradise logo">
       </div>
       <div class="session-stats">
-        <div class="session-stat">SYNC<b style="font-size:13px;">${syncStatusText}</b></div>
+        ${IS_ADMIN ? `<div class="session-stat">SYNC<b style="font-size:13px;">${syncStatusText}</b></div>` : ''}
         <div class="session-stat">GAMES PLAYED<b>${state.totalGamesPlayed}</b></div>
         <div class="session-stat">AVG LENGTH<b>${Math.round(avgGameMinutes())}m</b></div>
+        <div class="session-stat">TIME<b id="header-clock">${new Date().toLocaleTimeString()}</b></div>
       </div>
     </header>
     <div class="subtitle">Automatic, fair rotation for doubles — every group is 4 players, skill-balanced when ratings are set.
@@ -1566,9 +1676,22 @@ function render(){
       if(!IS_ADMIN){ showToast('View only — ask the admin for the edit link'); return; }
       const input = document.getElementById('name-input');
       const skillInput = document.getElementById('skill-input');
-      addPlayer(input.value, skillInput.value ? parseFloat(skillInput.value) : null);
-      input.value=''; skillInput.value='';
+      const feeInput = document.getElementById('fee-input');
+      const genderInput = document.getElementById('gender-input');
+      addPlayer(input.value, skillInput.value ? parseFloat(skillInput.value) : null, feeInput.value, genderInput.value || null);
+      input.value=''; skillInput.value=''; feeInput.value='adult'; genderInput.value='';
       input.focus();
+    });
+    const nameInput = document.getElementById('name-input');
+    nameInput.addEventListener('input', ()=>{
+      const known = findInDirectory(nameInput.value);
+      if(!known) return;
+      const skillInput = document.getElementById('skill-input');
+      const feeInput = document.getElementById('fee-input');
+      const genderInput = document.getElementById('gender-input');
+      skillInput.value = known.skill!=null ? String(known.skill) : '';
+      feeInput.value = known.feeCategory || 'adult';
+      genderInput.value = known.gender || '';
     });
   }
 
@@ -1615,6 +1738,8 @@ function updateLiveDurations(){
     const liveMs = checkin ? accrued + Math.max(0, Date.now()-Number(checkin)) : accrued;
     el.textContent = formatDuration(liveMs);
   });
+  const clockEl = document.getElementById('header-clock');
+  if(clockEl) clockEl.textContent = new Date().toLocaleTimeString();
 }
 function startTimers(){ updateLiveDurations(); }
 setInterval(updateLiveDurations, 1000);
@@ -1659,6 +1784,8 @@ document.addEventListener('click', (e)=>{
     case 'import-players': document.getElementById('import-file-input').click(); break;
     case 'admin-login': promptAdminLogin(); break;
     case 'admin-logout': adminLogout(); break;
+    case 'change-admin-password': changeAdminPassword(); break;
+    case 'close-day': if(confirm('End the game now? This stops all active games and tallies today\u2019s numbers.')) closeOutDay(); break;
     case 'end': openResultPicker(Number(id)); break;
     case 'win': recordResult(Number(id), btn.getAttribute('data-side')); break;
     case 'skip': recordResult(Number(id), null); break;
