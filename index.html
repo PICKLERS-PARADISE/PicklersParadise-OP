@@ -46,6 +46,8 @@
   .top-player-crown{ font-size:42px; line-height:1; margin-bottom:6px; }
   .top-player-name{ font-family:'Bebas Neue',sans-serif; font-size:36px; letter-spacing:0.5px; line-height:1; }
   .top-player-record{ font-family:'JetBrains Mono',monospace; font-size:13px; opacity:0.9; margin-top:6px; }
+  .admin-login-fab{ position:fixed; bottom:16px; right:16px; background:var(--card); border:1px solid var(--border); color:var(--muted); border-radius:999px; padding:8px 14px; font-size:12px; cursor:pointer; opacity:0.65; box-shadow:0 2px 8px rgba(0,0,0,0.1); z-index:40; }
+  .admin-login-fab:hover{ opacity:1; }
   .session-stats{ display:flex; gap:20px; }
   .session-stat{ font-family:'JetBrains Mono', monospace; text-align:right; font-size:12px; color: rgba(246,241,228,0.7); }
   .session-stat b{ display:block; font-size:22px; color: var(--bg); font-family:'Bebas Neue',sans-serif; letter-spacing:1px; }
@@ -208,15 +210,56 @@ async function sha256Hex(text){
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
 }
 
+const ADMIN_SESSION_KEY = 'pp-admin-unlocked';
+
 async function resolveAdminStatus(){
   const provided = new URLSearchParams(window.location.search).get('admin');
-  if(!provided){ IS_ADMIN = false; return; }
+  if(provided){
+    try{
+      const hash = await sha256Hex(provided);
+      if(hash === ADMIN_KEY_HASH){
+        IS_ADMIN = true;
+        try{ sessionStorage.setItem(ADMIN_SESSION_KEY, '1'); }catch(e){}
+        return;
+      }
+    }catch(e){ /* fall through to session check */ }
+  }
+  // No (or wrong) URL key — fall back to a password login unlocked earlier this browser session.
   try{
-    const hash = await sha256Hex(provided);
-    IS_ADMIN = (hash === ADMIN_KEY_HASH);
+    IS_ADMIN = sessionStorage.getItem(ADMIN_SESSION_KEY) === '1';
   }catch(e){
     IS_ADMIN = false;
   }
+}
+
+async function promptAdminLogin(){
+  const pw = prompt('Admin password');
+  if(pw===null) return;
+  try{
+    const hash = await sha256Hex(pw);
+    if(hash === ADMIN_KEY_HASH){
+      IS_ADMIN = true;
+      try{ sessionStorage.setItem(ADMIN_SESSION_KEY, '1'); }catch(e){}
+      showToast('Admin unlocked');
+      render();
+    } else {
+      showToast('Incorrect password');
+    }
+  }catch(e){
+    showToast("Couldn't verify password on this browser");
+  }
+}
+
+function adminLogout(){
+  IS_ADMIN = false;
+  try{ sessionStorage.removeItem(ADMIN_SESSION_KEY); }catch(e){}
+  // Drop the ?admin=... key from the URL bar too, so a refresh doesn't re-unlock it.
+  try{
+    const url = new URL(window.location.href);
+    url.searchParams.delete('admin');
+    window.history.replaceState({}, '', url.toString());
+  }catch(e){}
+  render();
 }
 
 let state = null;
@@ -1405,6 +1448,7 @@ function render(){
       <button class="fill-btn" data-action="open-income">💵 Income</button>
       <button class="fill-btn" data-action="open-weekly-report">📊 Weekly Report</button>
       <button class="reset-btn" data-action="copy-view-link">🔗 Copy view-only link</button>
+      <button class="reset-btn" data-action="admin-logout">🔒 Log out</button>
       <label class="pill-toggle"><input type="checkbox" data-action="toggle-autofill" ${state.autoFill?'checked':''}> Auto-send next group when a court opens</label>
       <label class="pill-toggle"><input type="checkbox" data-action="toggle-balance" ${state.autoBalance?'checked':''}> Balance by games played</label>
       <label class="pill-toggle"><input type="checkbox" data-action="toggle-wl" ${state.winnersLosersMode?'checked':''}> Winners' line & losers' line</label>
@@ -1490,6 +1534,7 @@ function render(){
 
     ${topPlayerPanelHtml}
   `;
+  const adminLoginFabHtml = !IS_ADMIN ? `<button class="admin-login-fab" data-action="admin-login">🔐 Admin</button>` : '';
 
   app.innerHTML = `
     <header class="top">
@@ -1511,6 +1556,7 @@ function render(){
       ${IS_ADMIN ? `<button class="icon-btn" data-action="edit-event-title" title="Edit open play title">✎</button>` : ''}
     </div>` : ''}
     ${IS_ADMIN ? adminBodyHtml : playerBodyHtml}
+    ${adminLoginFabHtml}
   `;
 
   const form = document.getElementById('add-form');
@@ -1573,7 +1619,7 @@ function updateLiveDurations(){
 function startTimers(){ updateLiveDurations(); }
 setInterval(updateLiveDurations, 1000);
 
-const READ_ONLY_ACTIONS = new Set(['export-players','export-all-data','copy-view-link']);
+const READ_ONLY_ACTIONS = new Set(['export-players','export-all-data','copy-view-link','admin-login']);
 
 document.addEventListener('click', (e)=>{
   const btn = e.target.closest('[data-action]');
@@ -1611,6 +1657,8 @@ document.addEventListener('click', (e)=>{
     }
     case 'import-all-data': document.getElementById('import-all-data-file-input').click(); break;
     case 'import-players': document.getElementById('import-file-input').click(); break;
+    case 'admin-login': promptAdminLogin(); break;
+    case 'admin-logout': adminLogout(); break;
     case 'end': openResultPicker(Number(id)); break;
     case 'win': recordResult(Number(id), btn.getAttribute('data-side')); break;
     case 'skip': recordResult(Number(id), null); break;
