@@ -1808,8 +1808,8 @@ function render(){
 
   const adminBodyHtml = `
     <div class="controls-panel">
-      <div class="control-group">
-        <span class="control-group-label">Game</span>
+      <div class="control-group danger-group">
+        <span class="control-group-label">Game & session</span>
         <div class="court-stepper">
           <span>Courts</span>
           <button data-action="court-minus">−</button>
@@ -1818,6 +1818,8 @@ function render(){
         </div>
         <button class="fill-btn" data-action="fill-all" ${fillDisabled?'disabled':''}>Fill all open courts</button>
         <button class="reset-btn" data-action="close-day">🏁 End Game</button>
+        <button class="reset-btn" data-action="reset-scores">New round, keep players</button>
+        <button class="reset-btn" data-action="reset">Reset session</button>
       </div>
 
       <div class="control-group">
@@ -1826,27 +1828,6 @@ function render(){
         <label class="pill-toggle"><input type="checkbox" data-action="toggle-balance" ${state.autoBalance?'checked':''}> Balance by games played</label>
         <label class="pill-toggle"><input type="checkbox" data-action="toggle-wl" ${state.winnersLosersMode?'checked':''}> Winners' line & losers' line</label>
         <label class="pill-toggle"><input type="checkbox" data-action="toggle-skill-sep" ${state.skillSeparationMode?'checked':''}> Separate by skill level</label>
-      </div>
-
-      <div class="control-group">
-        <span class="control-group-label">Reports & money</span>
-        <button class="fill-btn" data-action="open-income">💵 Income</button>
-        <button class="fill-btn" data-action="open-weekly-report">📊 Weekly Report</button>
-      </div>
-
-      <div class="control-group">
-        <span class="control-group-label">Account</span>
-        <button class="reset-btn" data-action="copy-view-link">🔗 Copy view-only link</button>
-        <button class="reset-btn" data-action="admin-logout">🔒 Log out</button>
-        <button class="reset-btn" data-action="change-admin-password">🔑 Change admin password</button>
-        <button class="reset-btn" data-action="change-income-password">🔒 Change income password</button>
-        <button class="reset-btn" data-action="change-operator-password">🧑‍💼 Change operator password</button>
-      </div>
-
-      <div class="control-group danger-group">
-        <span class="control-group-label">Session</span>
-        <button class="reset-btn" data-action="reset-scores">New round, keep players</button>
-        <button class="reset-btn" data-action="reset">Reset session</button>
       </div>
     </div>
 
@@ -1920,6 +1901,23 @@ function render(){
     </div>
     ${kingPanelHtml}
     ${queenPanelHtml}
+
+    <div class="controls-panel">
+      <div class="control-group">
+        <span class="control-group-label">Reports & money</span>
+        <button class="fill-btn" data-action="open-income">💵 Income</button>
+        <button class="fill-btn" data-action="open-weekly-report">📊 Weekly Report</button>
+      </div>
+
+      <div class="control-group">
+        <span class="control-group-label">Account</span>
+        <button class="reset-btn" data-action="copy-view-link">🔗 Copy view-only link</button>
+        <button class="reset-btn" data-action="admin-logout">🔒 Log out</button>
+        <button class="reset-btn" data-action="change-admin-password">🔑 Change admin password</button>
+        <button class="reset-btn" data-action="change-income-password">🔒 Change income password</button>
+        <button class="reset-btn" data-action="change-operator-password">🧑‍💼 Change operator password</button>
+      </div>
+    </div>
     ${incomeModalHtml}
     ${weeklyReportHtml}
   `;
