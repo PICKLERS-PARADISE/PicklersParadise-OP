@@ -41,11 +41,17 @@
   .event-title-box{ display:flex; align-items:center; justify-content:center; gap:10px; background:var(--card); border:1px solid var(--border); border-radius:var(--radius); padding:12px 18px; margin-bottom:20px; text-align:center; }
   .event-title-box .event-title-text{ font-family:'Bebas Neue',sans-serif; font-size:24px; letter-spacing:0.5px; color:var(--ink); }
   .event-title-box .event-title-text.placeholder{ color:var(--muted); font-family:'Inter',sans-serif; font-size:14px; font-style:italic; }
-  .top-player-panel{ background:linear-gradient(135deg, var(--gold), #9c7a24); border-radius:var(--radius); padding:26px 20px; text-align:center; color:#fff; }
+  .top-player-panel{ position:relative; overflow:hidden; background:linear-gradient(135deg, var(--gold), #9c7a24); border-radius:var(--radius); padding:28px 20px; text-align:center; color:#fff; }
   .top-player-panel.empty{ background:var(--card); border:1px solid var(--border); color:var(--muted); padding:20px; }
-  .top-player-crown{ font-size:42px; line-height:1; margin-bottom:6px; }
-  .top-player-name{ font-family:'Bebas Neue',sans-serif; font-size:36px; letter-spacing:0.5px; line-height:1; }
-  .top-player-record{ font-family:'JetBrains Mono',monospace; font-size:13px; opacity:0.9; margin-top:6px; }
+  .top-player-bg{ position:absolute; inset:0; opacity:0.22; pointer-events:none; }
+  .top-player-bg svg{ width:100%; height:100%; display:block; }
+  .top-player-content{ position:relative; z-index:1; }
+  .top-player-crown{ font-size:42px; line-height:1; margin-bottom:4px; }
+  .top-player-title{ font-family:'JetBrains Mono',monospace; font-size:13px; font-weight:700; letter-spacing:2.5px; text-transform:uppercase; color:rgba(255,255,255,0.85); }
+  .top-player-name{ font-family:'Georgia','Times New Roman',serif; font-style:italic; font-size:38px; letter-spacing:0.5px; line-height:1.15; margin-top:4px; }
+  .top-player-name.king-name{ color:#2c0d14; text-shadow:0 1px 0 rgba(255,255,255,0.4); }
+  .top-player-name.queen-name{ color:#5a1220; text-shadow:0 1px 0 rgba(255,255,255,0.4); }
+  .top-player-record{ font-family:'JetBrains Mono',monospace; font-size:13px; opacity:0.9; margin-top:8px; }
   .admin-login-fab{ position:fixed; bottom:16px; right:16px; background:var(--card); border:1px solid var(--border); color:var(--muted); border-radius:999px; padding:8px 14px; font-size:12px; cursor:pointer; opacity:0.65; box-shadow:0 2px 8px rgba(0,0,0,0.1); z-index:40; }
   .admin-login-fab:hover{ opacity:1; }
   .session-stats{ display:flex; gap:20px; }
@@ -1433,24 +1439,54 @@ function render(){
       }).join('')}
     </div>` : `<div class="empty-note" style="padding:6px 0;">Add players to see the leaderboard.</div>`;
 
-  const kingPanelHtml = `
-    <section class="label">King of the Court</section>
-    <div class="top-player-panel ${kingPlayer ? '' : 'empty'}">
-      ${kingPlayer ? `
-        <div class="top-player-crown">👑</div>
-        <div class="top-player-name">KING OF THE COURT ${kingPlayer.name}</div>
-        <div class="top-player-record">${kingPlayer.wins}-${kingPlayer.losses} record · ${kingPlayer.gamesPlayed} games played</div>
-      ` : `No results yet — play a few games to crown today's King of the Court.`}
+  // Decorative background: a throne silhouette flanked by a crossed-paddles icon
+  // and a dimpled pickleball, rendered as a low-opacity SVG watermark.
+  const courtDecorSvg = `
+    <svg viewBox="0 0 300 150" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+      <g fill="#ffffff">
+        <rect x="90" y="14" width="14" height="18"/>
+        <rect x="116" y="14" width="14" height="18"/>
+        <rect x="142" y="14" width="14" height="18"/>
+        <rect x="168" y="14" width="14" height="18"/>
+        <rect x="88" y="28" width="96" height="66" rx="3"/>
+        <rect x="78" y="94" width="116" height="16" rx="3"/>
+        <rect x="92" y="110" width="13" height="22"/>
+        <rect x="167" y="110" width="13" height="22"/>
+      </g>
+      <g stroke="#ffffff" stroke-width="5" stroke-linecap="round" fill="none">
+        <line x1="16" y1="18" x2="54" y2="56"/>
+        <line x1="54" y1="18" x2="16" y2="56"/>
+      </g>
+      <rect x="30" y="52" width="10" height="20" rx="3" fill="#ffffff"/>
+      <g fill="none" stroke="#ffffff" stroke-width="4">
+        <circle cx="252" cy="38" r="19"/>
+      </g>
+      <g fill="#ffffff">
+        <circle cx="245" cy="30" r="2.3"/>
+        <circle cx="259" cy="30" r="2.3"/>
+        <circle cx="252" cy="44" r="2.3"/>
+        <circle cx="238" cy="44" r="2.3"/>
+        <circle cx="266" cy="44" r="2.3"/>
+      </g>
+    </svg>`;
+
+  function courtRulerPanel(sectionLabel, titleText, nameClass, player, emptyNote){
+    return `
+    <section class="label">${sectionLabel}</section>
+    <div class="top-player-panel ${player ? '' : 'empty'}">
+      ${player ? `
+        <div class="top-player-bg">${courtDecorSvg}</div>
+        <div class="top-player-content">
+          <div class="top-player-crown">👑</div>
+          <div class="top-player-title">${titleText}</div>
+          <div class="top-player-name ${nameClass}">${player.name}</div>
+          <div class="top-player-record">${player.wins}-${player.losses} record · ${player.gamesPlayed} games played</div>
+        </div>
+      ` : emptyNote}
     </div>`;
-  const queenPanelHtml = `
-    <section class="label">Queen of the Court</section>
-    <div class="top-player-panel ${queenPlayer ? '' : 'empty'}">
-      ${queenPlayer ? `
-        <div class="top-player-crown">👑</div>
-        <div class="top-player-name">QUEEN OF THE COURT ${queenPlayer.name}</div>
-        <div class="top-player-record">${queenPlayer.wins}-${queenPlayer.losses} record · ${queenPlayer.gamesPlayed} games played</div>
-      ` : `No results yet — play a few games to crown today's Queen of the Court.`}
-    </div>`;
+  }
+  const kingPanelHtml = courtRulerPanel('King of the Court', 'King of the Court', 'king-name', kingPlayer, `No results yet — play a few games to crown today's King of the Court.`);
+  const queenPanelHtml = courtRulerPanel('Queen of the Court', 'Queen of the Court', 'queen-name', queenPlayer, `No results yet — play a few games to crown today's Queen of the Court.`);
 
   const fillDisabled = state.courts.every(c=>c.players) || selectGroup().four===null;
 
