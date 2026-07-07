@@ -44,7 +44,8 @@
   .top-player-panel{ background:linear-gradient(135deg, var(--gold), #9c7a24); border-radius:var(--radius); padding:26px 20px; text-align:center; color:#fff; }
   .top-player-panel.empty{ background:var(--card); border:1px solid var(--border); color:var(--muted); padding:20px; }
   .top-player-crown{ font-size:42px; line-height:1; margin-bottom:6px; }
-  .top-player-name{ font-family:'Bebas Neue',sans-serif; font-size:36px; letter-spacing:0.5px; line-height:1; }
+  .top-player-title{ font-family:'JetBrains Mono',monospace; font-size:13px; font-weight:700; letter-spacing:2.5px; text-transform:uppercase; color:rgba(255,255,255,0.85); }
+  .top-player-name{ font-family:'Bebas Neue',sans-serif; font-size:36px; letter-spacing:0.5px; line-height:1.15; margin-top:4px; }
   .top-player-record{ font-family:'JetBrains Mono',monospace; font-size:13px; opacity:0.9; margin-top:6px; }
   .admin-login-fab{ position:fixed; bottom:16px; right:16px; background:var(--card); border:1px solid var(--border); color:var(--muted); border-radius:999px; padding:8px 14px; font-size:12px; cursor:pointer; opacity:0.65; box-shadow:0 2px 8px rgba(0,0,0,0.1); z-index:40; }
   .admin-login-fab:hover{ opacity:1; }
@@ -1433,24 +1434,20 @@ function render(){
       }).join('')}
     </div>` : `<div class="empty-note" style="padding:6px 0;">Add players to see the leaderboard.</div>`;
 
-  const kingPanelHtml = `
-    <section class="label">King of the Court</section>
-    <div class="top-player-panel ${kingPlayer ? '' : 'empty'}">
-      ${kingPlayer ? `
+  function courtRulerPanel(sectionLabel, titleText, nameClass, player, emptyNote){
+    return `
+    <section class="label">${sectionLabel}</section>
+    <div class="top-player-panel ${player ? '' : 'empty'}">
+      ${player ? `
         <div class="top-player-crown">👑</div>
-        <div class="top-player-name">KING OF THE COURT ${kingPlayer.name}</div>
-        <div class="top-player-record">${kingPlayer.wins}-${kingPlayer.losses} record · ${kingPlayer.gamesPlayed} games played</div>
-      ` : `No results yet — play a few games to crown today's King of the Court.`}
+        <div class="top-player-title">${titleText}</div>
+        <div class="top-player-name ${nameClass}">${player.name}</div>
+        <div class="top-player-record">${player.wins}-${player.losses} record · ${player.gamesPlayed} games played</div>
+      ` : emptyNote}
     </div>`;
-  const queenPanelHtml = `
-    <section class="label">Queen of the Court</section>
-    <div class="top-player-panel ${queenPlayer ? '' : 'empty'}">
-      ${queenPlayer ? `
-        <div class="top-player-crown">👑</div>
-        <div class="top-player-name">QUEEN OF THE COURT ${queenPlayer.name}</div>
-        <div class="top-player-record">${queenPlayer.wins}-${queenPlayer.losses} record · ${queenPlayer.gamesPlayed} games played</div>
-      ` : `No results yet — play a few games to crown today's Queen of the Court.`}
-    </div>`;
+  }
+  const kingPanelHtml = courtRulerPanel('King of the Court', 'King of the Court', 'king-name', kingPlayer, `No results yet — play a few games to crown today's King of the Court.`);
+  const queenPanelHtml = courtRulerPanel('Queen of the Court', 'Queen of the Court', 'queen-name', queenPlayer, `No results yet — play a few games to crown today's Queen of the Court.`);
 
   const fillDisabled = state.courts.every(c=>c.players) || selectGroup().four===null;
 
