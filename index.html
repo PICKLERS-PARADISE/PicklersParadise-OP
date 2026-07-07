@@ -55,6 +55,10 @@
   .session-stat b{ display:block; font-size:22px; color: var(--bg); font-family:'Bebas Neue',sans-serif; letter-spacing:1px; }
 
   .controls-row{ display:flex; flex-wrap:wrap; gap:10px; margin-bottom:24px; align-items:center; }
+  .controls-panel{ display:flex; flex-direction:column; gap:10px; margin-bottom:24px; }
+  .control-group{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; background:var(--card); border:1px solid var(--border); border-radius:16px; padding:10px 16px; }
+  .control-group.danger-group{ border-color:rgba(178,58,46,0.35); }
+  .control-group-label{ font-family:'JetBrains Mono',monospace; font-size:10px; font-weight:700; letter-spacing:1.2px; text-transform:uppercase; color:var(--muted); white-space:nowrap; padding-right:10px; margin-right:2px; border-right:1px solid var(--border); }
   .pill-toggle{ display:flex; align-items:center; gap:8px; background:var(--card); border:1px solid var(--border); border-radius: 999px; padding:8px 14px; font-size:13px; cursor:pointer; user-select:none; }
   .pill-toggle input{ accent-color: var(--court); width:16px; height:16px; cursor:pointer; }
   .court-stepper{ display:flex; align-items:center; gap:8px; background:var(--card); border:1px solid var(--border); border-radius:999px; padding:6px 6px 6px 14px; font-size:13px; }
@@ -1803,29 +1807,47 @@ function render(){
     </div>` : '';
 
   const adminBodyHtml = `
-    <div class="controls-row">
-      <div class="court-stepper">
-        <span>Courts</span>
-        <button data-action="court-minus">−</button>
-        <b>${state.courts.length}</b>
-        <button data-action="court-plus">+</button>
+    <div class="controls-panel">
+      <div class="control-group">
+        <span class="control-group-label">Game</span>
+        <div class="court-stepper">
+          <span>Courts</span>
+          <button data-action="court-minus">−</button>
+          <b>${state.courts.length}</b>
+          <button data-action="court-plus">+</button>
+        </div>
+        <button class="fill-btn" data-action="fill-all" ${fillDisabled?'disabled':''}>Fill all open courts</button>
+        <button class="reset-btn" data-action="close-day">🏁 End Game</button>
       </div>
-      <button class="fill-btn" data-action="fill-all" ${fillDisabled?'disabled':''}>Fill all open courts</button>
-      <button class="fill-btn" data-action="open-income">💵 Income</button>
-      <button class="fill-btn" data-action="open-weekly-report">📊 Weekly Report</button>
-      <button class="reset-btn" data-action="copy-view-link">🔗 Copy view-only link</button>
-      <button class="reset-btn" data-action="admin-logout">🔒 Log out</button>
-      <button class="reset-btn" data-action="change-admin-password">🔑 Change admin password</button>
-      <button class="reset-btn" data-action="change-income-password">🔒 Change income password</button>
-      <button class="reset-btn" data-action="change-operator-password">🧑‍💼 Change operator password</button>
-      <button class="reset-btn" data-action="close-day">🏁 End Game</button>
-      <label class="pill-toggle"><input type="checkbox" data-action="toggle-autofill" ${state.autoFill?'checked':''}> Auto-send next group when a court opens</label>
-      <label class="pill-toggle"><input type="checkbox" data-action="toggle-balance" ${state.autoBalance?'checked':''}> Balance by games played</label>
-      <label class="pill-toggle"><input type="checkbox" data-action="toggle-wl" ${state.winnersLosersMode?'checked':''}> Winners' line & losers' line</label>
-      <label class="pill-toggle"><input type="checkbox" data-action="toggle-skill-sep" ${state.skillSeparationMode?'checked':''}> Separate by skill level</label>
-      <div class="spacer"></div>
-      <button class="reset-btn" data-action="reset-scores">New round, keep players</button>
-      <button class="reset-btn" data-action="reset">Reset session</button>
+
+      <div class="control-group">
+        <span class="control-group-label">Queue mode</span>
+        <label class="pill-toggle"><input type="checkbox" data-action="toggle-autofill" ${state.autoFill?'checked':''}> Auto-send next group when a court opens</label>
+        <label class="pill-toggle"><input type="checkbox" data-action="toggle-balance" ${state.autoBalance?'checked':''}> Balance by games played</label>
+        <label class="pill-toggle"><input type="checkbox" data-action="toggle-wl" ${state.winnersLosersMode?'checked':''}> Winners' line & losers' line</label>
+        <label class="pill-toggle"><input type="checkbox" data-action="toggle-skill-sep" ${state.skillSeparationMode?'checked':''}> Separate by skill level</label>
+      </div>
+
+      <div class="control-group">
+        <span class="control-group-label">Reports & money</span>
+        <button class="fill-btn" data-action="open-income">💵 Income</button>
+        <button class="fill-btn" data-action="open-weekly-report">📊 Weekly Report</button>
+      </div>
+
+      <div class="control-group">
+        <span class="control-group-label">Account</span>
+        <button class="reset-btn" data-action="copy-view-link">🔗 Copy view-only link</button>
+        <button class="reset-btn" data-action="admin-logout">🔒 Log out</button>
+        <button class="reset-btn" data-action="change-admin-password">🔑 Change admin password</button>
+        <button class="reset-btn" data-action="change-income-password">🔒 Change income password</button>
+        <button class="reset-btn" data-action="change-operator-password">🧑‍💼 Change operator password</button>
+      </div>
+
+      <div class="control-group danger-group">
+        <span class="control-group-label">Session</span>
+        <button class="reset-btn" data-action="reset-scores">New round, keep players</button>
+        <button class="reset-btn" data-action="reset">Reset session</button>
+      </div>
     </div>
 
     <section class="label">${state.courtsTitle} <button class="icon-btn" data-action="edit-courts-title" title="Edit this panel's title">✎</button></section>
@@ -1906,9 +1928,12 @@ function render(){
   // (add player, payment/paddle status, edit, sit out, queue reordering), but
   // no court control, settings toggles, income reports, or password changes.
   const operatorBodyHtml = `
-    <div class="controls-row">
-      <div class="spacer"></div>
-      <button class="reset-btn" data-action="operator-logout">🔒 Log out</button>
+    <div class="controls-panel">
+      <div class="control-group">
+        <span class="control-group-label">Account</span>
+        <div class="spacer"></div>
+        <button class="reset-btn" data-action="operator-logout">🔒 Log out</button>
+      </div>
     </div>
 
     <section class="label">${state.courtsTitle}</section>
