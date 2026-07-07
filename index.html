@@ -1398,27 +1398,22 @@ function render(){
 
   const withGames = allPlayers.slice().sort((a,b)=> (b.wins-b.losses) - (a.wins-a.losses) || b.wins-a.wins || a.name.localeCompare(b.name));
   const maxWins = withGames.length ? Math.max(...withGames.map(p=>p.wins)) : 0;
-  const championNames = maxWins>0 ? withGames.filter(p=>p.wins===maxWins).map(p=>p.name) : [];
 
-  const maleWithGames = withGames.filter(p=>p.gender==='M');
-  const maxMaleWins = maleWithGames.length ? Math.max(...maleWithGames.map(p=>p.wins)) : 0;
-  const kingNames = maxMaleWins>0 ? maleWithGames.filter(p=>p.wins===maxMaleWins).map(p=>p.name) : [];
-
-  const femaleWithGames = withGames.filter(p=>p.gender==='F');
-  const maxFemaleWins = femaleWithGames.length ? Math.max(...femaleWithGames.map(p=>p.wins)) : 0;
-  const queenNames = maxFemaleWins>0 ? femaleWithGames.filter(p=>p.wins===maxFemaleWins).map(p=>p.name) : [];
-
-  const leaderboardBadges = [];
-  if(championNames.length) leaderboardBadges.push(`<span class="champion-badge">🏆 ${championNames.join(' & ')} · ${maxWins} wins</span>`);
-  if(kingNames.length) leaderboardBadges.push(`<span class="champion-badge king-badge">👑 King: ${kingNames.join(' & ')} · ${maxMaleWins} wins</span>`);
-  if(queenNames.length) leaderboardBadges.push(`<span class="champion-badge queen-badge">👑 Queen: ${queenNames.join(' & ')} · ${maxFemaleWins} wins</span>`);
-  const leaderboardBadgesHtml = leaderboardBadges.length ? `<div class="leaderboard-badges">${leaderboardBadges.join('')}</div>` : '';
+  // King/Queen of the Court: highest wins first; among players tied on the highest
+  // win count, the one with fewer (ideally zero) losses takes the crown.
+  function pickCourtRuler(genderLetter){
+    const candidates = withGames.filter(p=>p.gender===genderLetter && p.gamesPlayed>0);
+    if(!candidates.length) return null;
+    return candidates.slice().sort((a,b)=> b.wins-a.wins || a.losses-b.losses || a.name.localeCompare(b.name))[0];
+  }
+  const kingPlayer = pickCourtRuler('M');
+  const queenPlayer = pickCourtRuler('F');
 
   function lbRowHtml(p, rank){
     let crown = '';
     if(p.wins===maxWins && maxWins>0) crown += '🏆';
-    if(p.gender==='M' && p.wins===maxMaleWins && maxMaleWins>0) crown += '👑';
-    if(p.gender==='F' && p.wins===maxFemaleWins && maxFemaleWins>0) crown += '👑';
+    if(p===kingPlayer) crown += '👑';
+    if(p===queenPlayer) crown += '👑';
     return `<div class="lb-row ${crown?'is-champion':''}"><span class="lb-rank ${rank===1?'gold':''}">${rank}</span><span class="lb-name">${crown?crown+' ':''}${p.name}</span><span class="lb-games">${p.gamesPlayed} GP</span><span class="lb-record">${p.wins}-${p.losses}</span><span class="lb-hours" data-checkin="${p.checkInAt||''}" data-accrued="${p.totalPlayMs||0}">${formatDuration(totalPlayMsFor(p))}</span></div>`;
   }
   const lbHeaderRowHtml = `<div class="lb-row" style="border-bottom:2px solid var(--ink); margin-bottom:2px; padding-bottom:8px;"><span class="lb-rank"></span><span class="lb-name" style="font-family:'JetBrains Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:var(--muted);">Player</span><span class="lb-games" style="font-weight:700;">GP</span><span class="lb-record" style="font-weight:700;">W-L</span><span class="lb-hours" style="font-weight:700;">Time</span></div>`;
@@ -1438,18 +1433,23 @@ function render(){
       }).join('')}
     </div>` : `<div class="empty-note" style="padding:6px 0;">Add players to see the leaderboard.</div>`;
 
-  const topPlayerToday = (withGames.length && maxWins>0) ? withGames[0] : null;
-  const topPlayerTitle = topPlayerToday
-    ? (topPlayerToday.gender==='M' ? 'King' : topPlayerToday.gender==='F' ? 'Queen' : 'Top Player')
-    : '';
-  const topPlayerPanelHtml = `
-    <section class="label">Top Player of the Day</section>
-    <div class="top-player-panel ${topPlayerToday ? '' : 'empty'}">
-      ${topPlayerToday ? `
+  const kingPanelHtml = `
+    <section class="label">King of the Court</section>
+    <div class="top-player-panel ${kingPlayer ? '' : 'empty'}">
+      ${kingPlayer ? `
         <div class="top-player-crown">👑</div>
-        <div class="top-player-name">${topPlayerTitle} ${topPlayerToday.name}</div>
-        <div class="top-player-record">${topPlayerToday.wins}-${topPlayerToday.losses} record · ${topPlayerToday.gamesPlayed} games played</div>
-      ` : `No results yet — play a few games to crown today's top player.`}
+        <div class="top-player-name">KING OF THE COURT ${kingPlayer.name}</div>
+        <div class="top-player-record">${kingPlayer.wins}-${kingPlayer.losses} record · ${kingPlayer.gamesPlayed} games played</div>
+      ` : `No results yet — play a few games to crown today's King of the Court.`}
+    </div>`;
+  const queenPanelHtml = `
+    <section class="label">Queen of the Court</section>
+    <div class="top-player-panel ${queenPlayer ? '' : 'empty'}">
+      ${queenPlayer ? `
+        <div class="top-player-crown">👑</div>
+        <div class="top-player-name">QUEEN OF THE COURT ${queenPlayer.name}</div>
+        <div class="top-player-record">${queenPlayer.wins}-${queenPlayer.losses} record · ${queenPlayer.gamesPlayed} games played</div>
+      ` : `No results yet — play a few games to crown today's Queen of the Court.`}
     </div>`;
 
   const fillDisabled = state.courts.every(c=>c.players) || selectGroup().four===null;
@@ -1635,14 +1635,14 @@ function render(){
         <div class="unpaid-panel">${unpaidHtml}</div>
 
         <section class="label" style="font-size:16px;">Leaderboard</section>
-        ${leaderboardBadgesHtml}
         <div class="leaderboard">
           ${withGames.length ? `<div class="lb-row" style="border-bottom:2px solid var(--ink); margin-bottom:2px; padding-bottom:8px;"><span class="lb-rank"></span><span class="lb-name" style="font-family:'JetBrains Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:var(--muted);">Player</span><span class="lb-games" style="font-weight:700;">GP</span><span class="lb-record" style="font-weight:700;">W-L</span></div>` : ''}
           ${leaderboardHtml}
         </div>
       </div>
     </div>
-    ${topPlayerPanelHtml}
+    ${kingPanelHtml}
+    ${queenPanelHtml}
     ${incomeModalHtml}
     ${weeklyReportHtml}
   `;
@@ -1654,13 +1654,14 @@ function render(){
     <section class="label">Coming up</section>
     ${nextBoardHtml || '<div class="empty-note">Not enough players waiting yet.</div>'}
 
-    <section class="label">Leaderboard ${leaderboardBadgesHtml}</section>
+    <section class="label">Leaderboard</section>
     ${standingColumnsHtml}
 
     <section class="label">Unpaid <span class="count-badge">${unpaidPlayers.length}</span></section>
     <div class="unpaid-panel">${unpaidHtmlReadOnly}</div>
 
-    ${topPlayerPanelHtml}
+    ${kingPanelHtml}
+    ${queenPanelHtml}
   `;
   const adminLoginFabHtml = !IS_ADMIN ? `<button class="admin-login-fab" data-action="admin-login">🔐 Admin</button>` : '';
 
