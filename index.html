@@ -912,20 +912,39 @@ function shiftWeeklyReportWeek(delta){
 
 async function editDailyIncome(key){
   if(!IS_ADMIN) return;
-  const pw = prompt('Enter the income password to correct this day\u2019s income');
+  const pw = prompt('Enter the income password to correct this day\u2019s numbers');
   if(pw===null) return;
   let hash;
   try{ hash = await sha256Hex(pw); }catch(e){ showToast("Couldn't verify password on this browser"); return; }
-  if(hash !== currentIncomeHash()){ showToast('Incorrect income password — income not changed'); return; }
+  if(hash !== currentIncomeHash()){ showToast('Incorrect income password — nothing changed'); return; }
 
   const entry = ensureDailyEntry(key);
-  const next = prompt(`New total income for ${key} (currently \u20b1${entry.income||0})`, String(entry.income||0));
-  if(next===null) return;
-  const value = parseFloat(next);
-  if(isNaN(value) || value < 0){ showToast('Enter a valid, non-negative amount'); return; }
-  entry.income = Math.round(value * 100) / 100;
+  let changed = [];
+
+  const nextIncome = prompt(`New total income for ${key} (currently \u20b1${entry.income||0})\n\nLeave as-is and press OK, or Cancel to skip this field.`, String(entry.income||0));
+  if(nextIncome!==null){
+    const value = parseFloat(nextIncome);
+    if(isNaN(value) || value < 0){ showToast('Income: enter a valid, non-negative amount — left unchanged'); }
+    else{ entry.income = Math.round(value * 100) / 100; changed.push('income'); }
+  }
+
+  const nextPlayers = prompt(`New player count for ${key} (currently ${entry.playerCount||0})\n\nCancel to skip this field.`, String(entry.playerCount||0));
+  if(nextPlayers!==null){
+    const value = parseInt(nextPlayers, 10);
+    if(isNaN(value) || value < 0){ showToast('Players: enter a valid, non-negative whole number — left unchanged'); }
+    else{ entry.playerCount = value; changed.push('players'); }
+  }
+
+  const nextGames = prompt(`New games-played count for ${key} (currently ${entry.gamesPlayed||0})\n\nCancel to skip this field.`, String(entry.gamesPlayed||0));
+  if(nextGames!==null){
+    const value = parseInt(nextGames, 10);
+    if(isNaN(value) || value < 0){ showToast('Games: enter a valid, non-negative whole number — left unchanged'); }
+    else{ entry.gamesPlayed = value; changed.push('games'); }
+  }
+
+  if(!changed.length){ showToast('Nothing changed'); return; }
   saveState(); render();
-  showToast(`Income for ${key} set to \u20b1${entry.income}`);
+  showToast(`${key}: updated ${changed.join(', ')}`);
 }
 
 function closeOutDay(){
@@ -1607,6 +1626,45 @@ function render(){
   const weekTotalPlayers = reportDays.reduce((s,d)=>s+d.players, 0);
   const weekTotalIncome = reportDays.reduce((s,d)=>s+d.income, 0);
   const weekRangeLabel = weeklyReportWeekOffset===0 ? 'This week' : `${weeklyReportWeekOffset} week${weeklyReportWeekOffset>1?'s':''} ago`;
+
+  // Monthly totals: group every day ever logged (state.dailyLog persists across
+  // session resets) by calendar month, so the admin can compare month to month.
+  const monthTotalsMap = {};
+  Object.keys(state.dailyLog || {}).forEach(dayKey=>{
+    const entry = state.dailyLog[dayKey];
+    const monthKey = dayKey.slice(0,7); // "YYYY-MM"
+    if(!monthTotalsMap[monthKey]) monthTotalsMap[monthKey] = { players:0, games:0, income:0 };
+    monthTotalsMap[monthKey].players += entry.playerCount!==undefined ? entry.playerCount : (entry.playerNames ? entry.playerNames.length : 0);
+    monthTotalsMap[monthKey].games += entry.gamesPlayed || 0;
+    monthTotalsMap[monthKey].income += entry.income || 0;
+  });
+  const monthTotals = Object.keys(monthTotalsMap).sort().reverse().map(monthKey=>{
+    const [y,m] = monthKey.split('-');
+    const label = new Date(Number(y), Number(m)-1, 1).toLocaleDateString(undefined, { month:'long', year:'numeric' });
+    return { monthKey, label, ...monthTotalsMap[monthKey] };
+  });
+  const bestPlayersMonth = monthTotals.length ? Math.max(...monthTotals.map(m=>m.players)) : 0;
+  const bestGamesMonth = monthTotals.length ? Math.max(...monthTotals.map(m=>m.games)) : 0;
+  const bestIncomeMonth = monthTotals.length ? Math.max(...monthTotals.map(m=>m.income)) : 0;
+  const monthlyTotalsHtml = monthTotals.length ? `
+    <div style="margin-top:22px;">
+      <div class="label" style="font-size:15px; margin-bottom:8px;">Monthly Totals</div>
+      <table class="income-table">
+        <thead><tr><th>Month</th><th style="text-align:right;">Players</th><th style="text-align:right;">Games</th><th style="text-align:right;">Income</th></tr></thead>
+        <tbody>
+          ${monthTotals.map(m=>`<tr>
+            <td>${m.label}</td>
+            <td class="num">${m.players}${m.players===bestPlayersMonth && bestPlayersMonth>0 ? ' 👑' : ''}</td>
+            <td class="num">${m.games}${m.games===bestGamesMonth && bestGamesMonth>0 ? ' 👑' : ''}</td>
+            <td class="num">₱${m.income}${m.income===bestIncomeMonth && bestIncomeMonth>0 ? ' 👑' : ''}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+      <div style="font-size:12px; color:var(--muted); margin-top:8px; line-height:1.6;">
+        👑 marks the best month so far for each column — they may not all be the same month.
+      </div>
+    </div>` : '';
+
   const weeklyReportHtml = showWeeklyReport ? `
     <div class="modal-overlay" data-action="close-weekly-report">
       <div class="modal-box" onclick="event.stopPropagation()">
@@ -1631,14 +1689,15 @@ function render(){
               <td class="num">${d.players}</td>
               <td class="num">${d.gamesPlayed}</td>
               <td class="num">₱${d.income}</td>
-              <td class="num">${IS_ADMIN ? `<button class="icon-btn" title="Correct this day's income" onclick="editDailyIncome('${d.key}')">✎</button>` : ''}</td>
+              <td class="num">${IS_ADMIN ? `<button class="icon-btn" title="Correct this day's players, games, or income" onclick="editDailyIncome('${d.key}')">✎</button>` : ''}</td>
             </tr>`).join('')}
             <tr class="income-total-row"><td>Total</td><td class="num">${weekTotalPlayers}</td><td class="num">${reportDays.reduce((s,d)=>s+d.gamesPlayed,0)}</td><td class="num">₱${weekTotalIncome}</td><td></td></tr>
           </tbody>
         </table>
         <div style="font-size:12px; color:var(--muted); margin-top:14px; line-height:1.6;">
-          "Players" counts everyone checked in that day (new additions), even after a session reset. 👑 marks the busiest day in the week shown. Use ✎ to correct a day's income total (requires the separate income password, not your admin login).
+          "Players" counts everyone checked in that day (new additions), even after a session reset. 👑 marks the busiest day in the week shown. Use ✎ to correct a day's players, games, or income (requires the separate income password, not your admin login).
         </div>
+        ${monthlyTotalsHtml}
       </div>
     </div>` : '';
 
