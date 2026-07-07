@@ -1315,10 +1315,16 @@ function render(){
   const nextGroupLabels = ['Next 4','2nd next 4','3rd next 4','4th next 4'];
   const nextBoardCard = (label, four)=>{
     const body = `<div class="next-card-players">${four.map(p=>`<div class="next-player">${p.name}${(IS_ADMIN && p.skill)?`<span class="skill-tag">${p.skill.toFixed(1)}</span>`:''}<span class="record-badge" style="margin-left:auto;">${p.wins}-${p.losses}</span></div>`).join('')}</div>`;
-    return `<div class="next-card ${label==='Next 4'?'is-first':''}"><div class="next-card-label">${label}</div>${body}</div>`;
+    return `<div class="next-card ${(label==='Next 4'||label==='Up next')?'is-first':''}"><div class="next-card-label">${label}</div>${body}</div>`;
   };
   const nextBoardHtml = nextGroups.length
     ? `<div class="next-board">${nextGroups.map((four,i)=>nextBoardCard(nextGroupLabels[i], four)).join('')}</div>`
+    : '';
+
+  // Player view fallback: if there aren't 4 waiting yet for a full "Coming up" group,
+  // still show whoever IS waiting so players know who's up next.
+  const upNextHtml = (!nextGroups.length && q.length)
+    ? `<div class="next-board">${nextBoardCard('Up next', q)}</div>`
     : '';
 
   let queueSectionHtml;
@@ -1649,7 +1655,7 @@ function render(){
     <div class="courts-grid">${courtsHtml}</div>
 
     <section class="label">Coming up</section>
-    ${nextBoardHtml || '<div class="empty-note">Not enough players waiting yet.</div>'}
+    ${nextBoardHtml || upNextHtml || '<div class="empty-note">Not enough players waiting yet.</div>'}
 
     <section class="label">Leaderboard</section>
     ${standingColumnsHtml}
