@@ -49,6 +49,7 @@
   .top-player-record{ font-family:'JetBrains Mono',monospace; font-size:13px; opacity:0.9; margin-top:6px; }
   .admin-login-fab{ position:fixed; bottom:16px; right:16px; background:var(--card); border:1px solid var(--border); color:var(--muted); border-radius:999px; padding:8px 14px; font-size:12px; cursor:pointer; opacity:0.65; box-shadow:0 2px 8px rgba(0,0,0,0.1); z-index:40; }
   .admin-login-fab:hover{ opacity:1; }
+  .operator-login-fab{ bottom:60px; }
   .session-stats{ display:flex; gap:20px; }
   .session-stat{ font-family:'JetBrains Mono', monospace; text-align:right; font-size:12px; color: rgba(246,241,228,0.7); }
   .session-stat b{ display:block; font-size:22px; color: var(--bg); font-family:'Bebas Neue',sans-serif; letter-spacing:1px; }
@@ -213,7 +214,14 @@ const DEFAULT_ADMIN_HASH = '923e1d8338070e764a40c83695a701e579aec73aa5e843fb39f5
 // Starting password: IncomeGuard-2026 — change it right away via the
 // "🔒 Change income password" button once you're logged in as admin.
 const DEFAULT_INCOME_HASH = '841d716cd88d9fc44897f49a3b902c230d1d8d914b2472ee891042f25f1517c5';
+// Operator: a third role, set/managed by the admin, for staff who run day-to-day
+// check-in duties (adding players, payment/paddle status, queue order) but should
+// never see admin settings, income reports, or password controls.
+// Starting password: CourtOperator-2026 — the admin should set a real one via the
+// "🧑‍💼 Change operator password" button, which also hands them a ready-to-share link.
+const DEFAULT_OPERATOR_HASH = '7a3055fec37e8461c85f53c514f11d24b77e9fb4a14da04b59ee0117bce5e7c0';
 let IS_ADMIN = false;
+let IS_OPERATOR = false;
 
 async function sha256Hex(text){
   const enc = new TextEncoder().encode(text);
@@ -227,6 +235,10 @@ function currentAdminHash(){
 
 function currentIncomeHash(){
   return (state && state.incomePasswordHash) ? state.incomePasswordHash : DEFAULT_INCOME_HASH;
+}
+
+function currentOperatorHash(){
+  return (state && state.operatorPasswordHash) ? state.operatorPasswordHash : DEFAULT_OPERATOR_HASH;
 }
 
 async function changeIncomePassword(){
@@ -287,31 +299,53 @@ function findInDirectory(name){
 }
 
 const ADMIN_SESSION_KEY = 'pp-admin-unlocked';
+const OPERATOR_SESSION_KEY = 'pp-operator-unlocked';
 
 async function resolveAdminStatus(){
-  const provided = new URLSearchParams(window.location.search).get('admin');
-  if(provided){
+  const params = new URLSearchParams(window.location.search);
+  const providedAdmin = params.get('admin');
+  const providedOperator = params.get('operator');
+  let matchedFromUrl = false;
+
+  if(providedAdmin){
     try{
-      const hash = await sha256Hex(provided);
+      const hash = await sha256Hex(providedAdmin);
       if(hash === currentAdminHash()){
         IS_ADMIN = true;
+        matchedFromUrl = true;
         try{ sessionStorage.setItem(ADMIN_SESSION_KEY, '1'); }catch(e){}
-        // Scrub the password out of the visible URL right away — once it's unlocked
-        // this tab, we don't need to keep displaying it in the address bar.
-        try{
-          const url = new URL(window.location.href);
-          url.searchParams.delete('admin');
-          window.history.replaceState({}, '', url.toString());
-        }catch(e){}
-        return;
       }
     }catch(e){ /* fall through to session check */ }
   }
+
+  if(!IS_ADMIN && providedOperator){
+    try{
+      const hash = await sha256Hex(providedOperator);
+      if(hash === currentOperatorHash()){
+        IS_OPERATOR = true;
+        matchedFromUrl = true;
+        try{ sessionStorage.setItem(OPERATOR_SESSION_KEY, '1'); }catch(e){}
+      }
+    }catch(e){ /* fall through to session check */ }
+  }
+
+  // Scrub any password out of the visible URL right away — once it's unlocked
+  // this tab, we don't need to keep displaying it in the address bar.
+  if(matchedFromUrl){
+    try{
+      const url = new URL(window.location.href);
+      url.searchParams.delete('admin');
+      url.searchParams.delete('operator');
+      window.history.replaceState({}, '', url.toString());
+    }catch(e){}
+  }
+
   // No (or wrong) URL key — fall back to a password login unlocked earlier this browser session.
-  try{
-    IS_ADMIN = sessionStorage.getItem(ADMIN_SESSION_KEY) === '1';
-  }catch(e){
-    IS_ADMIN = false;
+  if(!IS_ADMIN){
+    try{ IS_ADMIN = sessionStorage.getItem(ADMIN_SESSION_KEY) === '1'; }catch(e){ IS_ADMIN = false; }
+  }
+  if(!IS_ADMIN && !IS_OPERATOR){
+    try{ IS_OPERATOR = sessionStorage.getItem(OPERATOR_SESSION_KEY) === '1'; }catch(e){ IS_OPERATOR = false; }
   }
 }
 
@@ -324,6 +358,24 @@ async function promptAdminLogin(){
       IS_ADMIN = true;
       try{ sessionStorage.setItem(ADMIN_SESSION_KEY, '1'); }catch(e){}
       showToast('Admin unlocked');
+      render();
+    } else {
+      showToast('Incorrect password');
+    }
+  }catch(e){
+    showToast("Couldn't verify password on this browser");
+  }
+}
+
+async function promptOperatorLogin(){
+  const pw = prompt('Operator password');
+  if(pw===null) return;
+  try{
+    const hash = await sha256Hex(pw);
+    if(hash === currentOperatorHash()){
+      IS_OPERATOR = true;
+      try{ sessionStorage.setItem(OPERATOR_SESSION_KEY, '1'); }catch(e){}
+      showToast('Operator unlocked');
       render();
     } else {
       showToast('Incorrect password');
@@ -370,6 +422,51 @@ function adminLogout(){
   render();
 }
 
+function operatorLogout(){
+  IS_OPERATOR = false;
+  try{ sessionStorage.removeItem(OPERATOR_SESSION_KEY); }catch(e){}
+  try{
+    const url = new URL(window.location.href);
+    url.searchParams.delete('operator');
+    window.history.replaceState({}, '', url.toString());
+  }catch(e){}
+  render();
+}
+
+// Admin-only: sets the operator's password directly (no need to know the old one —
+// the admin owns this account) and hands back a ready-to-share link, since the
+// plaintext password is only ever available at the moment it's set.
+async function changeOperatorPassword(){
+  if(!IS_ADMIN) return;
+  const next = prompt('Enter the new operator password (for whoever runs check-in / queue duty)');
+  if(next===null) return;
+  if(!next.trim()){ showToast('Password cannot be blank — not changed'); return; }
+  const confirmNext = prompt('Re-enter the new operator password to confirm');
+  if(confirmNext===null) return;
+  if(confirmNext !== next){ showToast('Passwords did not match — not changed'); return; }
+
+  try{
+    state.operatorPasswordHash = await sha256Hex(next.trim());
+  }catch(e){
+    showToast("Couldn't set the new password on this browser");
+    return;
+  }
+  saveState();
+
+  try{
+    const url = new URL(window.location.href);
+    url.searchParams.delete('admin');
+    url.searchParams.delete('operator');
+    url.searchParams.set('operator', next.trim());
+    const urlStr = url.toString();
+    if(navigator.clipboard) navigator.clipboard.writeText(urlStr).catch(()=>{});
+    alert('Operator password changed. Operator link (copied to clipboard):\n' + urlStr + '\n\nShare this with your operator. It only lets them manage players and the queue — not admin settings, reports, or passwords.');
+  }catch(e){
+    showToast('Operator password changed');
+  }
+  render();
+}
+
 let state = null;
 let saveTimer = null;
 let showIncomeView = false;
@@ -394,6 +491,7 @@ function defaultState(){
     dailyLog: {},
     adminPasswordHash: DEFAULT_ADMIN_HASH,
     incomePasswordHash: DEFAULT_INCOME_HASH,
+    operatorPasswordHash: DEFAULT_OPERATOR_HASH,
     playerDirectory: {},
     lastAutoStopDate: null
   };
@@ -459,6 +557,7 @@ function migrateState(s){
   if(!s.dailyLog) s.dailyLog = {};
   if(!s.adminPasswordHash) s.adminPasswordHash = DEFAULT_ADMIN_HASH;
   if(!s.incomePasswordHash) s.incomePasswordHash = DEFAULT_INCOME_HASH;
+  if(!s.operatorPasswordHash) s.operatorPasswordHash = DEFAULT_OPERATOR_HASH;
   if(!s.playerDirectory) s.playerDirectory = {};
   if(s.lastAutoStopDate===undefined) s.lastAutoStopDate = null;
   const activePlayersForMigration = [...s.queue, ...s.courts.flatMap(c=>c.players||[])];
@@ -1279,11 +1378,13 @@ function resetSession(){
   const keepDailyLog = state.dailyLog;
   const keepAdminHash = state.adminPasswordHash;
   const keepIncomeHash = state.incomePasswordHash;
+  const keepOperatorHash = state.operatorPasswordHash;
   state = defaultState();
   state.playerDirectory = keepDirectory || {};
   state.dailyLog = keepDailyLog || {};
   state.adminPasswordHash = keepAdminHash || DEFAULT_ADMIN_HASH;
   state.incomePasswordHash = keepIncomeHash || DEFAULT_INCOME_HASH;
+  state.operatorPasswordHash = keepOperatorHash || DEFAULT_OPERATOR_HASH;
   saveState(); render();
 }
 
@@ -1335,7 +1436,7 @@ function renderQueueRows(list, draggable){
         <span class="name">${p.name}${p.skill?`<span class="skill-tag">${p.skill.toFixed(1)}</span>`:''}</span>
         <span class="record-badge">${p.wins}-${p.losses}</span>
         <span class="wait-badge ${wait.next?'next':''}">${wait.label}</span>
-        ${IS_ADMIN ? `<div class="row-actions">
+        ${(IS_ADMIN||IS_OPERATOR) ? `<div class="row-actions">
           <button class="fee-btn cat-${p.feeCategory}" data-action="toggle-fee" data-id="${p.id}" title="Tap to cycle Adult (₱50) / Student (₱30) / Free">${FEE_LABELS[p.feeCategory]}</button>
           <button class="icon-btn ${p.gender?'active-gender':''}" data-action="toggle-gender" data-id="${p.id}" title="Tap to cycle Male / Female / unset">${p.gender==='M'?'M':p.gender==='F'?'F':'—'}</button>
           <button class="icon-btn ${p.paid?'active-paid':''}" data-action="toggle-paid" data-id="${p.id}" title="${p.paid?'Paid — tap to mark unpaid':'Tap to mark as paid'}">$</button>
@@ -1468,7 +1569,7 @@ function render(){
         <div class="queue-list">${neutrals.length ? renderQueueRows(neutrals) : '<div class="empty-note">Nobody here — new arrivals and no-score games land in this line.</div>'}</div>
       </div>`;
   } else {
-    queueSectionHtml = `<div class="queue-list">${q.length ? renderQueueRows(q, IS_ADMIN) : '<div class="empty-note">No one is waiting. Add players below to build the queue.</div>'}</div>`;
+    queueSectionHtml = `<div class="queue-list">${q.length ? renderQueueRows(q, IS_ADMIN||IS_OPERATOR) : '<div class="empty-note">No one is waiting. Add players below to build the queue.</div>'}</div>`;
   }
 
   const sitoutHtml = state.sittingOut.length ? state.sittingOut.map(p=>`
@@ -1716,6 +1817,7 @@ function render(){
       <button class="reset-btn" data-action="admin-logout">🔒 Log out</button>
       <button class="reset-btn" data-action="change-admin-password">🔑 Change admin password</button>
       <button class="reset-btn" data-action="change-income-password">🔒 Change income password</button>
+      <button class="reset-btn" data-action="change-operator-password">🧑‍💼 Change operator password</button>
       <button class="reset-btn" data-action="close-day">🏁 End Game</button>
       <label class="pill-toggle"><input type="checkbox" data-action="toggle-autofill" ${state.autoFill?'checked':''}> Auto-send next group when a court opens</label>
       <label class="pill-toggle"><input type="checkbox" data-action="toggle-balance" ${state.autoBalance?'checked':''}> Balance by games played</label>
@@ -1800,6 +1902,79 @@ function render(){
     ${weeklyReportHtml}
   `;
 
+  // Operator view: same day-to-day player/queue management tools as admin
+  // (add player, payment/paddle status, edit, sit out, queue reordering), but
+  // no court control, settings toggles, income reports, or password changes.
+  const operatorBodyHtml = `
+    <div class="controls-row">
+      <div class="spacer"></div>
+      <button class="reset-btn" data-action="operator-logout">🔒 Log out</button>
+    </div>
+
+    <section class="label">${state.courtsTitle}</section>
+    <div class="courts-grid">${courtsHtml}</div>
+
+    <div class="lower-grid">
+      <div>
+        <section class="label">Up next <span class="count-badge">${waitingCount} waiting</span></section>
+        ${nextBoardHtml}
+        ${queueSectionHtml}
+
+        <section class="label" style="font-size:16px;margin-top:22px;">Sitting out</section>
+        <div class="sitout-list">${state.sittingOut.length ? sitoutHtml : '<div class="empty-note">No one\u2019s resting right now. Tap the \u23f8 pause button next to a name in the queue to send them here for a while.</div>'}</div>
+      </div>
+      <div>
+        <section class="label">Add player</section>
+        <datalist id="player-directory-list">
+          ${directoryOptionsHtml}
+        </datalist>
+        <form class="add-form" id="add-form">
+          <input type="text" id="name-input" list="player-directory-list" placeholder="Player name (start typing to find a returning player)" autocomplete="off">
+          <select id="skill-input">
+            <option value="">Unrated</option>
+            <option value="2.0">2.0</option>
+            <option value="2.5">2.5</option>
+            <option value="3.0">3.0</option>
+            <option value="3.5">3.5</option>
+            <option value="4.0">4.0</option>
+            <option value="4.5">4.5</option>
+            <option value="5.0">5.0</option>
+          </select>
+          <select id="fee-input">
+            <option value="adult">Adult</option>
+            <option value="student">Student</option>
+            <option value="free">Free</option>
+          </select>
+          <select id="gender-input">
+            <option value="">Gender: —</option>
+            <option value="M">Male</option>
+            <option value="F">Female</option>
+          </select>
+          <button type="submit">Add</button>
+        </form>
+        <div class="roster-panel">
+          <div style="font-size:13px;color:var(--muted);line-height:1.6;">
+            ${state.skillSeparationMode
+              ? 'Separate by skill level is on: beginners (2.0-2.9), intermediate (3.0-3.9), and advanced (4.0-5.0) players are grouped with their own tier whenever there are 4 of them ready. Unrated players fold in wherever a tier is short a player. Set a rating when adding someone so they land in the right line.'
+              : state.winnersLosersMode
+              ? 'Winners and losers lines are on: after each scored game, winners queue up to play winners and losers queue up to play losers. New arrivals and no-score games sit in the middle line until they get a result.'
+              : 'New players join the back of the line. Drag the ⠿ handle on any row to manually reorder the queue.'}
+          </div>
+        </div>
+        <section class="label" style="font-size:16px;">Unpaid <span class="count-badge">${unpaidPlayers.length}${unpaidTotal?` · ₱${unpaidTotal}`:''}</span></section>
+        <div class="unpaid-panel">${unpaidHtml}</div>
+
+        <section class="label" style="font-size:16px;">Leaderboard</section>
+        <div class="leaderboard">
+          ${withGames.length ? `<div class="lb-row" style="border-bottom:2px solid var(--ink); margin-bottom:2px; padding-bottom:8px;"><span class="lb-rank"></span><span class="lb-name" style="font-family:'JetBrains Mono',monospace; font-size:10px; text-transform:uppercase; letter-spacing:0.5px; color:var(--muted);">Player</span><span class="lb-games" style="font-weight:700;">GP</span><span class="lb-record" style="font-weight:700;">W-L</span></div>` : ''}
+          ${leaderboardHtml}
+        </div>
+      </div>
+    </div>
+    ${kingPanelHtml}
+    ${queenPanelHtml}
+  `;
+
   const playerBodyHtml = `
     <section class="label">${state.courtsTitle}</section>
     <div class="courts-grid">${courtsHtml}</div>
@@ -1817,6 +1992,7 @@ function render(){
     ${queenPanelHtml}
   `;
   const adminLoginFabHtml = !IS_ADMIN ? `<button class="admin-login-fab" data-action="admin-login">🔐 Admin</button>` : '';
+  const operatorLoginFabHtml = (!IS_ADMIN && !IS_OPERATOR) ? `<button class="admin-login-fab operator-login-fab" data-action="operator-login">🧑‍💼 Operator</button>` : '';
 
   app.innerHTML = `
     <header class="top">
@@ -1831,22 +2007,23 @@ function render(){
       </div>
     </header>
     <div class="subtitle">Automatic, fair rotation for doubles — every group is 4 players, skill-balanced when ratings are set.
-      ${IS_ADMIN ? `<span class="mode-badge is-admin">✏️ Edit Mode</span>` : ''}
+      ${IS_ADMIN ? `<span class="mode-badge is-admin">✏️ Edit Mode</span>` : IS_OPERATOR ? `<span class="mode-badge is-admin">🧑‍💼 Operator Mode</span>` : ''}
     </div>
     ${(state.eventTitle || IS_ADMIN) ? `
     <div class="event-title-box">
       <span class="event-title-text ${state.eventTitle ? '' : 'placeholder'}">${state.eventTitle || 'Tap ✎ to set a title for today\u2019s open play'}</span>
       ${IS_ADMIN ? `<button class="icon-btn" data-action="edit-event-title" title="Edit open play title">✎</button>` : ''}
     </div>` : ''}
-    ${IS_ADMIN ? adminBodyHtml : playerBodyHtml}
+    ${IS_ADMIN ? adminBodyHtml : (IS_OPERATOR ? operatorBodyHtml : playerBodyHtml)}
     ${adminLoginFabHtml}
+    ${operatorLoginFabHtml}
   `;
 
   const form = document.getElementById('add-form');
   if(form){
     form.addEventListener('submit', (e)=>{
       e.preventDefault();
-      if(!IS_ADMIN){ showToast('View only — ask the admin for the edit link'); return; }
+      if(!IS_ADMIN && !IS_OPERATOR){ showToast('View only — ask the admin for the edit link'); return; }
       const input = document.getElementById('name-input');
       const skillInput = document.getElementById('skill-input');
       const feeInput = document.getElementById('fee-input');
@@ -1917,14 +2094,18 @@ function updateLiveDurations(){
 function startTimers(){ updateLiveDurations(); }
 setInterval(updateLiveDurations, 1000);
 
-const READ_ONLY_ACTIONS = new Set(['export-players','export-all-data','copy-view-link','admin-login']);
+const READ_ONLY_ACTIONS = new Set(['export-players','export-all-data','copy-view-link','admin-login','operator-login']);
+// Actions an Operator is allowed to perform: player/queue management only —
+// no court control, settings, reports, or password changes.
+const OPERATOR_ACTIONS = new Set(['edit','toggle-paid','toggle-paddle','toggle-gender','toggle-fee','up','down','sitout','return','remove','operator-logout']);
 
 document.addEventListener('click', (e)=>{
   const btn = e.target.closest('[data-action]');
   if(!btn) return;
   const action = btn.getAttribute('data-action');
-  if(!IS_ADMIN && !READ_ONLY_ACTIONS.has(action)){
-    showToast('View only — ask the admin for the edit link');
+  const allowed = IS_ADMIN || READ_ONLY_ACTIONS.has(action) || (IS_OPERATOR && OPERATOR_ACTIONS.has(action));
+  if(!allowed){
+    showToast(IS_OPERATOR ? "Operators can't do that — ask the admin" : 'View only — ask the admin for the edit link');
     return;
   }
   const id = btn.getAttribute('data-id');
@@ -1957,6 +2138,9 @@ document.addEventListener('click', (e)=>{
     case 'import-players': document.getElementById('import-file-input').click(); break;
     case 'admin-login': promptAdminLogin(); break;
     case 'admin-logout': adminLogout(); break;
+    case 'operator-login': promptOperatorLogin(); break;
+    case 'operator-logout': operatorLogout(); break;
+    case 'change-operator-password': changeOperatorPassword(); break;
     case 'change-admin-password': changeAdminPassword(); break;
     case 'change-income-password': changeIncomePassword(); break;
     case 'close-day': if(confirm('End the game now? This stops all active games and tallies today\u2019s numbers.')) closeOutDay(); break;
@@ -1996,7 +2180,7 @@ document.addEventListener('change', (e)=>{
 const dragState = { id: null, overId: null, active: false };
 
 document.addEventListener('pointerdown', (e)=>{
-  if(!IS_ADMIN) return;
+  if(!IS_ADMIN && !IS_OPERATOR) return;
   const handle = e.target.closest('.drag-handle');
   if(!handle) return;
   const row = handle.closest('.queue-row[data-draggable="true"]');
