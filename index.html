@@ -207,6 +207,12 @@ const STORAGE_KEY = 'pickleball-open-play-state';
 // changeAdminPassword below); this is the original password's hash, used as
 // the starting value and as a fallback before state has loaded.
 const DEFAULT_ADMIN_HASH = '923e1d8338070e764a40c83695a701e579aec73aa5e843fb39f5458bc861cb19';
+// A completely separate password just for correcting income totals — deliberately
+// distinct from the admin password so that anyone with the shared admin login
+// can run the queue but cannot edit financial records unless they also know this.
+// Starting password: IncomeGuard-2026 — change it right away via the
+// "🔒 Change income password" button once you're logged in as admin.
+const DEFAULT_INCOME_HASH = '841d716cd88d9fc44897f49a3b902c230d1d8d914b2472ee891042f25f1517c5';
 let IS_ADMIN = false;
 
 async function sha256Hex(text){
@@ -217,6 +223,36 @@ async function sha256Hex(text){
 
 function currentAdminHash(){
   return (state && state.adminPasswordHash) ? state.adminPasswordHash : DEFAULT_ADMIN_HASH;
+}
+
+function currentIncomeHash(){
+  return (state && state.incomePasswordHash) ? state.incomePasswordHash : DEFAULT_INCOME_HASH;
+}
+
+async function changeIncomePassword(){
+  if(!IS_ADMIN) return;
+  const current = prompt('Enter the current income password to confirm');
+  if(current===null) return;
+  let currentHash;
+  try{ currentHash = await sha256Hex(current); }catch(e){ showToast("Couldn't verify password on this browser"); return; }
+  if(currentHash !== currentIncomeHash()){ showToast('Current income password is incorrect — not changed'); return; }
+
+  const next = prompt('Enter the new income password (this can be different from your admin password)');
+  if(next===null) return;
+  if(!next.trim()){ showToast('Password cannot be blank — not changed'); return; }
+  const confirmNext = prompt('Re-enter the new income password to confirm');
+  if(confirmNext===null) return;
+  if(confirmNext !== next){ showToast('Passwords did not match — not changed'); return; }
+
+  try{
+    state.incomePasswordHash = await sha256Hex(next.trim());
+  }catch(e){
+    showToast("Couldn't set the new password on this browser");
+    return;
+  }
+  saveState();
+  showToast('Income password changed');
+  render();
 }
 
 function upsertDirectory(p){
@@ -260,6 +296,13 @@ async function resolveAdminStatus(){
       if(hash === currentAdminHash()){
         IS_ADMIN = true;
         try{ sessionStorage.setItem(ADMIN_SESSION_KEY, '1'); }catch(e){}
+        // Scrub the password out of the visible URL right away — once it's unlocked
+        // this tab, we don't need to keep displaying it in the address bar.
+        try{
+          const url = new URL(window.location.href);
+          url.searchParams.delete('admin');
+          window.history.replaceState({}, '', url.toString());
+        }catch(e){}
         return;
       }
     }catch(e){ /* fall through to session check */ }
@@ -331,6 +374,7 @@ let state = null;
 let saveTimer = null;
 let showIncomeView = false;
 let showWeeklyReport = false;
+let weeklyReportWeekOffset = 0;
 
 function uid(){ return Math.random().toString(36).slice(2,9); }
 
@@ -349,6 +393,7 @@ function defaultState(){
     gameDurationsMs: [],
     dailyLog: {},
     adminPasswordHash: DEFAULT_ADMIN_HASH,
+    incomePasswordHash: DEFAULT_INCOME_HASH,
     playerDirectory: {},
     lastAutoStopDate: null
   };
@@ -413,6 +458,7 @@ function migrateState(s){
   if(s.eventTitle===undefined || s.eventTitle===null) s.eventTitle = '';
   if(!s.dailyLog) s.dailyLog = {};
   if(!s.adminPasswordHash) s.adminPasswordHash = DEFAULT_ADMIN_HASH;
+  if(!s.incomePasswordHash) s.incomePasswordHash = DEFAULT_INCOME_HASH;
   if(!s.playerDirectory) s.playerDirectory = {};
   if(s.lastAutoStopDate===undefined) s.lastAutoStopDate = null;
   const activePlayersForMigration = [...s.queue, ...s.courts.flatMap(c=>c.players||[])];
@@ -824,15 +870,25 @@ function todayKey(d){
 
 function ensureDailyEntry(key){
   if(!state.dailyLog) state.dailyLog = {};
-  if(!state.dailyLog[key]) state.dailyLog[key] = { playerNames: [], income: 0, gamesPlayed: 0 };
-  if(state.dailyLog[key].gamesPlayed===undefined) state.dailyLog[key].gamesPlayed = 0;
-  return state.dailyLog[key];
+  if(!state.dailyLog[key]) state.dailyLog[key] = { playerNames: [], income: 0, gamesPlayed: 0, playerCount: 0 };
+  const entry = state.dailyLog[key];
+  if(entry.gamesPlayed===undefined) entry.gamesPlayed = 0;
+  // Firebase's database silently drops empty arrays/objects when a day has had
+  // no check-ins yet. Self-heal that here, and keep a plain-number counter
+  // (playerCount) as the source of truth for "how many players today" since
+  // numbers — even 0 — are never pruned the way an empty array can be.
+  if(!Array.isArray(entry.playerNames)) entry.playerNames = [];
+  if(entry.playerCount===undefined) entry.playerCount = entry.playerNames.length;
+  return entry;
 }
 
 function logPlayerCheckIn(name){
   const entry = ensureDailyEntry(todayKey());
   const key = name.trim().toLowerCase();
-  if(key && !entry.playerNames.some(n=>n.toLowerCase()===key)) entry.playerNames.push(name);
+  if(key && !entry.playerNames.some(n=>n.toLowerCase()===key)){
+    entry.playerNames.push(name);
+    entry.playerCount = (entry.playerCount||0) + 1;
+  }
 }
 
 function logIncomeDelta(amount){
@@ -847,7 +903,30 @@ function logGamePlayed(){
 
 
 function closeIncomeModal(){ showIncomeView = false; render(); }
-function closeWeeklyReport(){ showWeeklyReport = false; render(); }
+function closeWeeklyReport(){ showWeeklyReport = false; weeklyReportWeekOffset = 0; render(); }
+
+function shiftWeeklyReportWeek(delta){
+  weeklyReportWeekOffset = Math.max(0, weeklyReportWeekOffset + delta);
+  render();
+}
+
+async function editDailyIncome(key){
+  if(!IS_ADMIN) return;
+  const pw = prompt('Enter the income password to correct this day\u2019s income');
+  if(pw===null) return;
+  let hash;
+  try{ hash = await sha256Hex(pw); }catch(e){ showToast("Couldn't verify password on this browser"); return; }
+  if(hash !== currentIncomeHash()){ showToast('Incorrect income password — income not changed'); return; }
+
+  const entry = ensureDailyEntry(key);
+  const next = prompt(`New total income for ${key} (currently \u20b1${entry.income||0})`, String(entry.income||0));
+  if(next===null) return;
+  const value = parseFloat(next);
+  if(isNaN(value) || value < 0){ showToast('Enter a valid, non-negative amount'); return; }
+  entry.income = Math.round(value * 100) / 100;
+  saveState(); render();
+  showToast(`Income for ${key} set to \u20b1${entry.income}`);
+}
 
 function closeOutDay(){
   if(!state) return;
@@ -1180,10 +1259,12 @@ function resetSession(){
   const keepDirectory = state.playerDirectory;
   const keepDailyLog = state.dailyLog;
   const keepAdminHash = state.adminPasswordHash;
+  const keepIncomeHash = state.incomePasswordHash;
   state = defaultState();
   state.playerDirectory = keepDirectory || {};
   state.dailyLog = keepDailyLog || {};
   state.adminPasswordHash = keepAdminHash || DEFAULT_ADMIN_HASH;
+  state.incomePasswordHash = keepIncomeHash || DEFAULT_INCOME_HASH;
   saveState(); render();
 }
 
@@ -1504,18 +1585,20 @@ function render(){
       </div>
     </div>` : '';
 
-  // Last 7 calendar days, most recent first, pulled from the persistent daily log
-  // (this keeps accumulating day over day even through "Reset session").
+  // Last 7 calendar days for the selected week, most recent first, pulled from the
+  // persistent daily log (this keeps accumulating day over day through "Reset session").
+  // weeklyReportWeekOffset: 0 = current week (today back 7 days), 1 = the 7 days
+  // before that, 2 = the 7 before that, etc. — lets the admin page back through history.
   const reportDays = [];
   for(let i=0;i<7;i++){
     const d = new Date();
-    d.setDate(d.getDate()-i);
+    d.setDate(d.getDate() - i - (weeklyReportWeekOffset*7));
     const key = todayKey(d);
-    const entry = (state.dailyLog && state.dailyLog[key]) || { playerNames: [], income: 0, gamesPlayed: 0 };
+    const entry = (state.dailyLog && state.dailyLog[key]) || { playerNames: [], income: 0, gamesPlayed: 0, playerCount: 0 };
     reportDays.push({
       key,
       label: d.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' }),
-      players: entry.playerNames ? entry.playerNames.length : 0,
+      players: entry.playerCount!==undefined ? entry.playerCount : (entry.playerNames ? entry.playerNames.length : 0),
       income: entry.income || 0,
       gamesPlayed: entry.gamesPlayed || 0
     });
@@ -1523,6 +1606,7 @@ function render(){
   const busiestCount = Math.max(0, ...reportDays.map(d=>d.players));
   const weekTotalPlayers = reportDays.reduce((s,d)=>s+d.players, 0);
   const weekTotalIncome = reportDays.reduce((s,d)=>s+d.income, 0);
+  const weekRangeLabel = weeklyReportWeekOffset===0 ? 'This week' : `${weeklyReportWeekOffset} week${weeklyReportWeekOffset>1?'s':''} ago`;
   const weeklyReportHtml = showWeeklyReport ? `
     <div class="modal-overlay" data-action="close-weekly-report">
       <div class="modal-box" onclick="event.stopPropagation()">
@@ -1530,24 +1614,30 @@ function render(){
           <h2>📊 Weekly Report</h2>
           <button class="modal-close-btn" onclick="closeWeeklyReport()">Close</button>
         </div>
+        <div style="display:flex; justify-content:center; align-items:center; gap:12px; margin:6px 0 4px;">
+          <button class="reset-btn" onclick="shiftWeeklyReportWeek(1)">◀ Older week</button>
+          <span style="font-family:'JetBrains Mono',monospace; font-size:13px; font-weight:700;">${weekRangeLabel}</span>
+          <button class="reset-btn" onclick="shiftWeeklyReportWeek(-1)" ${weeklyReportWeekOffset===0?'disabled':''}>Newer week ▶</button>
+        </div>
         <div class="income-summary">
-          <span>Last 7 days players: ${weekTotalPlayers}</span>
-          <span>Last 7 days income: ₱${weekTotalIncome}</span>
+          <span>7-day players: ${weekTotalPlayers}</span>
+          <span>7-day income: ₱${weekTotalIncome}</span>
         </div>
         <table class="income-table">
-          <thead><tr><th>Day</th><th style="text-align:right;">Players</th><th style="text-align:right;">Games</th><th style="text-align:right;">Income</th></tr></thead>
+          <thead><tr><th>Day</th><th style="text-align:right;">Players</th><th style="text-align:right;">Games</th><th style="text-align:right;">Income</th><th></th></tr></thead>
           <tbody>
             ${reportDays.map(d=>`<tr ${d.players===busiestCount && busiestCount>0 ? 'style="background:rgba(199,162,39,0.15); font-weight:700;"' : ''}>
               <td>${d.label}${d.players===busiestCount && busiestCount>0 ? ' 👑' : ''}</td>
               <td class="num">${d.players}</td>
               <td class="num">${d.gamesPlayed}</td>
               <td class="num">₱${d.income}</td>
+              <td class="num">${IS_ADMIN ? `<button class="icon-btn" title="Correct this day's income" onclick="editDailyIncome('${d.key}')">✎</button>` : ''}</td>
             </tr>`).join('')}
-            <tr class="income-total-row"><td>Total</td><td class="num">${weekTotalPlayers}</td><td class="num">${reportDays.reduce((s,d)=>s+d.gamesPlayed,0)}</td><td class="num">₱${weekTotalIncome}</td></tr>
+            <tr class="income-total-row"><td>Total</td><td class="num">${weekTotalPlayers}</td><td class="num">${reportDays.reduce((s,d)=>s+d.gamesPlayed,0)}</td><td class="num">₱${weekTotalIncome}</td><td></td></tr>
           </tbody>
         </table>
         <div style="font-size:12px; color:var(--muted); margin-top:14px; line-height:1.6;">
-          "Players" counts everyone checked in that day (new additions), even after a session reset. 👑 marks the day with the most players so far this week.
+          "Players" counts everyone checked in that day (new additions), even after a session reset. 👑 marks the busiest day in the week shown. Use ✎ to correct a day's income total (requires the separate income password, not your admin login).
         </div>
       </div>
     </div>` : '';
@@ -1566,6 +1656,7 @@ function render(){
       <button class="reset-btn" data-action="copy-view-link">🔗 Copy view-only link</button>
       <button class="reset-btn" data-action="admin-logout">🔒 Log out</button>
       <button class="reset-btn" data-action="change-admin-password">🔑 Change admin password</button>
+      <button class="reset-btn" data-action="change-income-password">🔒 Change income password</button>
       <button class="reset-btn" data-action="close-day">🏁 End Game</button>
       <label class="pill-toggle"><input type="checkbox" data-action="toggle-autofill" ${state.autoFill?'checked':''}> Auto-send next group when a court opens</label>
       <label class="pill-toggle"><input type="checkbox" data-action="toggle-balance" ${state.autoBalance?'checked':''}> Balance by games played</label>
@@ -1791,8 +1882,8 @@ document.addEventListener('click', (e)=>{
     case 'toggle-fee': cycleFeeCategory(id); break;
     case 'open-income': showIncomeView = true; render(); break;
     case 'close-income': showIncomeView = false; render(); break;
-    case 'open-weekly-report': showWeeklyReport = true; render(); break;
-    case 'close-weekly-report': showWeeklyReport = false; render(); break;
+    case 'open-weekly-report': showWeeklyReport = true; weeklyReportWeekOffset = 0; render(); break;
+    case 'close-weekly-report': showWeeklyReport = false; weeklyReportWeekOffset = 0; render(); break;
     case 'export-players': exportPlayers(); break;
     case 'export-all-data': exportAllData(); break;
     case 'copy-view-link': {
@@ -1808,6 +1899,7 @@ document.addEventListener('click', (e)=>{
     case 'admin-login': promptAdminLogin(); break;
     case 'admin-logout': adminLogout(); break;
     case 'change-admin-password': changeAdminPassword(); break;
+    case 'change-income-password': changeIncomePassword(); break;
     case 'close-day': if(confirm('End the game now? This stops all active games and tallies today\u2019s numbers.')) closeOutDay(); break;
     case 'end': openResultPicker(Number(id)); break;
     case 'win': recordResult(Number(id), btn.getAttribute('data-side')); break;
