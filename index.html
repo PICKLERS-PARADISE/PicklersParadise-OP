@@ -476,6 +476,7 @@ let saveTimer = null;
 let showIncomeView = false;
 let showWeeklyReport = false;
 let weeklyReportWeekOffset = 0;
+let viewingArchiveKey = null;
 
 function uid(){ return Math.random().toString(36).slice(2,9); }
 
@@ -493,6 +494,7 @@ function defaultState(){
     totalGamesPlayed: 0,
     gameDurationsMs: [],
     dailyLog: {},
+    sessionArchives: {},
     adminPasswordHash: DEFAULT_ADMIN_HASH,
     incomePasswordHash: DEFAULT_INCOME_HASH,
     operatorPasswordHash: DEFAULT_OPERATOR_HASH,
@@ -559,6 +561,7 @@ function migrateState(s){
   if(s.courtsTitle===undefined || s.courtsTitle===null) s.courtsTitle = 'On court';
   if(s.eventTitle===undefined || s.eventTitle===null) s.eventTitle = '';
   if(!s.dailyLog) s.dailyLog = {};
+  if(!s.sessionArchives) s.sessionArchives = {};
   if(!s.adminPasswordHash) s.adminPasswordHash = DEFAULT_ADMIN_HASH;
   if(!s.incomePasswordHash) s.incomePasswordHash = DEFAULT_INCOME_HASH;
   if(!s.operatorPasswordHash) s.operatorPasswordHash = DEFAULT_OPERATOR_HASH;
@@ -860,7 +863,10 @@ function recordResult(courtId, winnerSide){
     winners.forEach((p,i)=>{ p.gamesPlayed += 1; p.joinedAt = now + i; state.queue.push(p); });
     losers.forEach((p,i)=>{ p.gamesPlayed += 1; p.joinedAt = now + 2 + i; state.queue.push(p); });
   } else {
-    court.players.forEach((p,i)=>{ p.gamesPlayed += 1; p.joinedAt = now + i; state.queue.push(p); });
+    // No winner recorded (Skip, or a game force-ended by "End Game") — send players
+    // back to the queue, but don't count it toward gamesPlayed, since nothing was
+    // actually decided. This keeps gamesPlayed always equal to wins + losses.
+    court.players.forEach((p,i)=>{ p.joinedAt = now + i; state.queue.push(p); });
   }
 
   state.totalGamesPlayed += 1;
@@ -1006,7 +1012,9 @@ function logGamePlayed(){
 
 
 function closeIncomeModal(){ showIncomeView = false; render(); }
-function closeWeeklyReport(){ showWeeklyReport = false; weeklyReportWeekOffset = 0; render(); }
+function closeWeeklyReport(){ showWeeklyReport = false; weeklyReportWeekOffset = 0; viewingArchiveKey = null; render(); }
+
+function closeArchiveView(){ viewingArchiveKey = null; render(); }
 
 function shiftWeeklyReportWeek(delta){
   weeklyReportWeekOffset = Math.max(0, weeklyReportWeekOffset + delta);
@@ -1058,13 +1066,45 @@ function closeOutDay(){
 
   const key = todayKey();
   const entry = ensureDailyEntry(key);
+
+  // Safety net: make sure everyone currently on the roster — including anyone
+  // sitting out — is reflected in today's count, in case they were ever missed
+  // (e.g. added through a path that didn't log a check-in). logPlayerCheckIn
+  // is dedup-safe, so re-logging someone already counted is a no-op.
+  const everyonePresent = [...state.queue, ...state.sittingOut];
+  everyonePresent.forEach(p=> logPlayerCheckIn(p.name));
+
+  // Archive a full snapshot of today's roster — this survives "Reset session"
+  // (unlike the live queue itself), so you can look back at exactly who played,
+  // their record, and their payment/paddle status even after starting fresh.
+  if(!state.sessionArchives) state.sessionArchives = {};
+  state.sessionArchives[key] = {
+    savedAt: Date.now(),
+    income: entry.income || 0,
+    gamesPlayed: entry.gamesPlayed || 0,
+    playerCount: entry.playerCount || 0,
+    players: everyonePresent.map(p=>({
+      name: p.name,
+      skill: p.skill,
+      gender: p.gender,
+      feeCategory: p.feeCategory,
+      paid: p.paid,
+      paddleRent: p.paddleRent,
+      wins: p.wins,
+      losses: p.losses,
+      gamesPlayed: p.gamesPlayed,
+      totalPlayMs: totalPlayMsFor(p)
+    })).sort((a,b)=> a.name.localeCompare(b.name))
+  };
+
   state.lastAutoStopDate = key;
   saveState(); render();
 
   const summary = "Game ended — all active games were stopped.\n\n"
-    + `Players checked in today: ${entry.playerNames.length}\n`
+    + `Players checked in today: ${entry.playerCount}\n`
     + `Games played today: ${entry.gamesPlayed}\n`
-    + `Income collected today: ₱${entry.income}`;
+    + `Income collected today: ₱${entry.income}\n\n`
+    + `A full snapshot of today's roster was saved — find it in the Weekly Report (📦 icon) any time, even after resetting the session.`;
   alert(summary);
 }
 
@@ -1380,12 +1420,14 @@ function resetSession(){
   if(!confirm('Clear all players and courts and start a new session?')) return;
   const keepDirectory = state.playerDirectory;
   const keepDailyLog = state.dailyLog;
+  const keepArchives = state.sessionArchives;
   const keepAdminHash = state.adminPasswordHash;
   const keepIncomeHash = state.incomePasswordHash;
   const keepOperatorHash = state.operatorPasswordHash;
   state = defaultState();
   state.playerDirectory = keepDirectory || {};
   state.dailyLog = keepDailyLog || {};
+  state.sessionArchives = keepArchives || {};
   state.adminPasswordHash = keepAdminHash || DEFAULT_ADMIN_HASH;
   state.incomePasswordHash = keepIncomeHash || DEFAULT_INCOME_HASH;
   state.operatorPasswordHash = keepOperatorHash || DEFAULT_OPERATOR_HASH;
@@ -1794,7 +1836,7 @@ function render(){
               <td class="num">${d.players}</td>
               <td class="num">${d.gamesPlayed}</td>
               <td class="num">₱${d.income}</td>
-              <td class="num">${IS_ADMIN ? `<button class="icon-btn" title="Correct this day's players, games, or income" onclick="editDailyIncome('${d.key}')">✎</button>` : ''}</td>
+              <td class="num">${IS_ADMIN ? `<button class="icon-btn" title="Correct this day's players, games, or income" onclick="editDailyIncome('${d.key}')">✎</button>${state.sessionArchives && state.sessionArchives[d.key] ? `<button class="icon-btn" data-action="view-archive" data-key="${d.key}" title="View that day's full player roster">📦</button>` : ''}` : ''}</td>
             </tr>`).join('')}
             <tr class="income-total-row"><td>Total</td><td class="num">${weekTotalPlayers}</td><td class="num">${reportDays.reduce((s,d)=>s+d.gamesPlayed,0)}</td><td class="num">₱${weekTotalIncome}</td><td></td></tr>
           </tbody>
@@ -1803,6 +1845,41 @@ function render(){
           "Players" counts everyone checked in that day (new additions), even after a session reset. 👑 marks the busiest day in the week shown. Use ✎ to correct a day's players, games, or income (requires the separate income password, not your admin login).
         </div>
         ${monthlyTotalsHtml}
+      </div>
+    </div>` : '';
+
+  const viewingArchive = (viewingArchiveKey && state.sessionArchives) ? state.sessionArchives[viewingArchiveKey] : null;
+  const archiveModalHtml = (viewingArchiveKey && viewingArchive) ? `
+    <div class="modal-overlay" data-action="close-archive">
+      <div class="modal-box" onclick="event.stopPropagation()">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+          <h2>📦 ${new Date(viewingArchiveKey+'T00:00:00').toLocaleDateString(undefined,{weekday:'long', month:'long', day:'numeric', year:'numeric'})}</h2>
+          <button class="modal-close-btn" onclick="closeArchiveView()">Close</button>
+        </div>
+        <div class="income-summary">
+          <span>Players: ${viewingArchive.playerCount}</span>
+          <span>Games: ${viewingArchive.gamesPlayed}</span>
+          <span>Income: ₱${viewingArchive.income}</span>
+        </div>
+        <div style="font-size:12px; color:var(--muted); margin:4px 0 10px;">Snapshot saved ${new Date(viewingArchive.savedAt).toLocaleString()} when "End Game" was clicked that day.</div>
+        <table class="income-table">
+          <thead><tr><th>Player</th><th>Skill</th><th>Category</th><th>Paid</th><th>Paddle</th><th style="text-align:right;">W-L</th><th style="text-align:right;">GP</th><th style="text-align:right;">Time</th></tr></thead>
+          <tbody>
+            ${viewingArchive.players.map(p=>`<tr>
+              <td>${p.name}</td>
+              <td>${p.skill!=null ? p.skill.toFixed(1) : '—'}</td>
+              <td>${p.feeCategory==='student'?'Student':p.feeCategory==='free'?'Free':'Adult'}</td>
+              <td>${p.paid ? '✅' : '—'}</td>
+              <td>${p.paddleRent ? '🏓' : '—'}</td>
+              <td class="num">${p.wins}-${p.losses}</td>
+              <td class="num">${p.gamesPlayed}</td>
+              <td class="num">${formatDuration(p.totalPlayMs||0)}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+        <div style="font-size:12px; color:var(--muted); margin-top:14px; line-height:1.6;">
+          This is a frozen snapshot from the moment "End Game" was clicked — it won't change even if you edit players today. Corrections made via ✎ in the Weekly Report update the day's totals but not this saved roster.
+        </div>
       </div>
     </div>` : '';
 
@@ -1920,6 +1997,7 @@ function render(){
     </div>
     ${incomeModalHtml}
     ${weeklyReportHtml}
+    ${archiveModalHtml}
   `;
 
   // Operator view: same day-to-day player/queue management tools as admin
@@ -2146,7 +2224,9 @@ document.addEventListener('click', (e)=>{
     case 'open-income': showIncomeView = true; render(); break;
     case 'close-income': showIncomeView = false; render(); break;
     case 'open-weekly-report': showWeeklyReport = true; weeklyReportWeekOffset = 0; render(); break;
-    case 'close-weekly-report': showWeeklyReport = false; weeklyReportWeekOffset = 0; render(); break;
+    case 'close-weekly-report': showWeeklyReport = false; weeklyReportWeekOffset = 0; viewingArchiveKey = null; render(); break;
+    case 'view-archive': viewingArchiveKey = btn.getAttribute('data-key'); render(); break;
+    case 'close-archive': viewingArchiveKey = null; render(); break;
     case 'export-players': exportPlayers(); break;
     case 'export-all-data': exportAllData(); break;
     case 'copy-view-link': {
