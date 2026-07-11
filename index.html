@@ -916,6 +916,14 @@ function cancelResultPicker(courtId){
   render();
 }
 
+function resetCourt(courtId){
+  const court = state.courts.find(c=>c.id===courtId);
+  if(!court || !court.players) return;
+  const names = court.players.map(p=>p.name).join(', ');
+  if(!confirm(`Send ${names} back to the waiting line? No score will be recorded for this game.`)) return;
+  recordResult(courtId, null);
+}
+
 function recordResult(courtId, winnerSide){
   const court = state.courts.find(c=>c.id===courtId);
   if(!court || !court.players) return;
@@ -1612,6 +1620,7 @@ function render(){
             <button class="btn btn-outline" style="flex:1" data-action="shuffle" data-id="${court.id}" title="Cycle the same 4 players into a different pairing">Shuffle partners</button>
             <button class="btn btn-outline" style="flex:1" data-action="end" data-id="${court.id}">End game</button>
           </div>
+          <button class="skip-link" data-action="reset-court" data-id="${court.id}" title="Send these 4 players back to the waiting line — no score recorded">🔄 Reset court (back to waiting line)</button>
         </div>`;
       const chipDetails = p => (IS_ADMIN||IS_OPERATOR) ? `${p.wins}-${p.losses}${p.gender?' · '+p.gender:''}${p.paid?' · $':''}${p.paddleRent?' · 🏓':''}` : `${p.wins}-${p.losses}`;
       return `
@@ -1657,6 +1666,15 @@ function render(){
     ? `<div class="next-board">${nextGroups.map((four,i)=>nextBoardCard(nextGroupLabels[i], four)).join('')}</div>`
     : '';
 
+  // In Winners/Losers mode, only the very next group is actually locked in
+  // (see selectGroup's reservation). "2nd next 4" and beyond are just a live
+  // preview and can keep reshuffling as more games finish — showing that to
+  // players looks like a bug even though it's working as designed. So the
+  // player-facing view only shows the one group that's actually guaranteed.
+  const playerNextBoardHtml = (state.winnersLosersMode && nextGroups.length)
+    ? `<div class="next-board">${nextBoardCard(nextGroupLabels[0], nextGroups[0])}</div>`
+    : nextBoardHtml;
+
   // Player view fallback: if there aren't 4 waiting yet for a full "Coming up" group,
   // still show whoever IS waiting so players know who's up next.
   const upNextHtml = (!nextGroups.length && q.length)
@@ -1693,15 +1711,15 @@ function render(){
     queueSectionHtml = `
       <div class="pool-block">
         <div class="pool-head"><span class="dot win"></span>Winners' line <span class="count-badge">${winners.length}</span></div>
-        <div class="queue-list">${winners.length ? renderQueueRows(winners) : '<div class="empty-note">No winners waiting yet.</div>'}</div>
+        <div class="queue-list">${winners.length ? renderQueueRows(winners, IS_ADMIN||IS_OPERATOR) : '<div class="empty-note">No winners waiting yet.</div>'}</div>
       </div>
       <div class="pool-block">
         <div class="pool-head"><span class="dot loss"></span>Losers' line <span class="count-badge">${losers.length}</span></div>
-        <div class="queue-list">${losers.length ? renderQueueRows(losers) : '<div class="empty-note">No losers waiting yet.</div>'}</div>
+        <div class="queue-list">${losers.length ? renderQueueRows(losers, IS_ADMIN||IS_OPERATOR) : '<div class="empty-note">No losers waiting yet.</div>'}</div>
       </div>
       <div class="pool-block">
         <div class="pool-head"><span class="dot new" style="background:var(--ball)"></span>New / unrated <span class="count-badge">${neutrals.length}</span></div>
-        <div class="queue-list">${neutrals.length ? renderQueueRows(neutrals) : '<div class="empty-note">Nobody here — new arrivals and no-score games land in this line.</div>'}</div>
+        <div class="queue-list">${neutrals.length ? renderQueueRows(neutrals, IS_ADMIN||IS_OPERATOR) : '<div class="empty-note">Nobody here — new arrivals and no-score games land in this line.</div>'}</div>
       </div>`;
   } else {
     queueSectionHtml = `<div class="queue-list">${q.length ? renderQueueRows(q, IS_ADMIN||IS_OPERATOR) : '<div class="empty-note">No one is waiting. Add players below to build the queue.</div>'}</div>`;
@@ -2201,7 +2219,7 @@ function render(){
     <div class="courts-grid">${courtsHtml}</div>
 
     <section class="label">Coming up</section>
-    ${nextBoardHtml || upNextHtml || '<div class="empty-note">Not enough players waiting yet.</div>'}
+    ${playerNextBoardHtml || upNextHtml || '<div class="empty-note">Not enough players waiting yet.</div>'}
 
     <section class="label">Leaderboard</section>
     ${standingColumnsHtml}
@@ -2321,7 +2339,7 @@ const READ_ONLY_ACTIONS = new Set(['export-players','export-all-data','copy-view
 // Operator gets everything except Income, Weekly Report, and Account/password actions.
 const OPERATOR_ACTIONS = new Set([
   'edit','toggle-paid','toggle-paddle','toggle-gender','toggle-fee','up','down','sitout','return','remove','operator-logout',
-  'start','fill-all','shuffle','end','win','skip','cancel-result',
+  'start','fill-all','shuffle','end','win','skip','cancel-result','reset-court',
   'edit-courts-title','edit-event-title',
   'court-plus','court-minus','reset-scores','reset','close-day',
   'export-players','import-players','export-all-data','import-all-data'
@@ -2375,6 +2393,7 @@ document.addEventListener('click', (e)=>{
     case 'change-income-password': changeIncomePassword(); break;
     case 'close-day': if(confirm('End the game now? This stops all active games and tallies today\u2019s numbers.')) closeOutDay(); break;
     case 'end': openResultPicker(Number(id)); break;
+    case 'reset-court': resetCourt(Number(id)); break;
     case 'win': recordResult(Number(id), btn.getAttribute('data-side')); break;
     case 'skip': recordResult(Number(id), null); break;
     case 'cancel-result': cancelResultPicker(Number(id)); break;
