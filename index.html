@@ -748,15 +748,31 @@ function selectGroupFrom(q){
   }
 
   if(state.winnersLosersMode){
+    // Three "waiting lists": players who've never played yet (neutral), players
+    // who just won and are waiting to play winners, and players who just lost
+    // and are waiting to play losers. Each list only becomes a candidate group
+    // once it has 4 people — that's how win-win and lose-lose groups form.
     const winners = q.filter(p=>p.lastResult==='won');
     const losers = q.filter(p=>p.lastResult==='lost');
     const neutrals = q.filter(p=>!p.lastResult);
 
-    // Anyone who hasn't played yet gets priority — winners and losers from the
-    // previous game only get sent back out once everyone waiting has had a turn.
-    if(neutrals.length>=4) return {four: neutrals.slice(0,4), note:null};
-    if(winners.length>=4) return {four: winners.slice(0,4), note:null};
-    if(losers.length>=4) return {four: losers.slice(0,4), note:null};
+    const candidates = [];
+    if(neutrals.length>=4) candidates.push({four: neutrals.slice(0,4)});
+    if(winners.length>=4) candidates.push({four: winners.slice(0,4)});
+    if(losers.length>=4) candidates.push({four: losers.slice(0,4)});
+
+    if(candidates.length){
+      // Whichever ready group contains the longest-waiting player goes next.
+      // This is what keeps things fair: a completed winners or losers group
+      // always joins the very back of the line (see recordResult, which stamps
+      // them with a fresh joinedAt), so they can only leapfrog someone who's
+      // waited less time than them — never someone who's been waiting longer.
+      // In practice, when a winners group and a losers group both complete from
+      // the same round, the winners naturally go out first since they're
+      // stamped into the queue a beat before the losers from that same game.
+      candidates.sort((a,b)=> Math.min(...a.four.map(p=>p.joinedAt)) - Math.min(...b.four.map(p=>p.joinedAt)));
+      return {four: candidates[0].four, note:null};
+    }
     if(q.length>=4) return {four: q.slice(0,4), note:'Not enough winners or losers stacked up yet — mixed to keep courts moving.'};
     return {four:null, note:null};
   }
@@ -1499,12 +1515,15 @@ function render(){
   const app = document.getElementById('app');
   const waitingCount = state.queue.length;
   const q = orderedQueue();
+  const wlStatusText = state.winnersLosersMode
+    ? ` Right now: ${q.filter(p=>!p.lastResult).length} never-played, ${q.filter(p=>p.lastResult==='won').length}/4 waiting to play winners, ${q.filter(p=>p.lastResult==='lost').length}/4 waiting to play losers.`
+    : '';
   const directoryOptionsHtml = getDirectoryOptionsHtml();
 
   const courtsHtml = state.courts.map(court=>{
     if(court.players){
       const [a,b,c,d] = court.players;
-      const actionsOrPicker = !IS_ADMIN ? `
+      const actionsOrPicker = !(IS_ADMIN||IS_OPERATOR) ? `
         <div class="court-actions">
           <span class="timer" data-timer="${court.id}" data-started="${court.startedAt}">00:00</span>
         </div>` : court.awaitingResult ? `
@@ -1525,7 +1544,7 @@ function render(){
             <button class="btn btn-outline" style="flex:1" data-action="end" data-id="${court.id}">End game</button>
           </div>
         </div>`;
-      const chipDetails = p => IS_ADMIN ? `${p.wins}-${p.losses}${p.gender?' · '+p.gender:''}${p.paid?' · $':''}${p.paddleRent?' · 🏓':''}` : `${p.wins}-${p.losses}`;
+      const chipDetails = p => (IS_ADMIN||IS_OPERATOR) ? `${p.wins}-${p.losses}${p.gender?' · '+p.gender:''}${p.paid?' · $':''}${p.paddleRent?' · 🏓':''}` : `${p.wins}-${p.losses}`;
       return `
       <div class="court-tile">
         <div class="court-head"><span>COURT ${court.id}</span><span class="game-num">GAME ${court.gameNum}</span></div>
@@ -1552,8 +1571,8 @@ function render(){
       <div class="court-tile">
         <div class="court-head"><span>COURT ${court.id}</span><span>OPEN</span></div>
         <div class="court-empty">
-          <div class="msg">Court open. ${IS_ADMIN ? 'Send in the next 4 when ready.' : 'Waiting for the next group.'}</div>
-          ${IS_ADMIN ? `<button class="btn btn-ball" data-action="start" data-id="${court.id}" ${readyNow?'':'disabled'}>Send in next 4</button>` : ''}
+          <div class="msg">Court open. ${(IS_ADMIN||IS_OPERATOR) ? 'Send in the next 4 when ready.' : 'Waiting for the next group.'}</div>
+          ${(IS_ADMIN||IS_OPERATOR) ? `<button class="btn btn-ball" data-action="start" data-id="${court.id}" ${readyNow?'':'disabled'}>Send in next 4</button>` : ''}
         </div>
       </div>`;
   }).join('');
@@ -1561,7 +1580,7 @@ function render(){
   const nextGroups = previewGroups(4);
   const nextGroupLabels = ['Next 4','2nd next 4','3rd next 4','4th next 4'];
   const nextBoardCard = (label, four)=>{
-    const body = `<div class="next-card-players">${four.map(p=>`<div class="next-player">${p.name}${(IS_ADMIN && p.skill)?`<span class="skill-tag">${p.skill.toFixed(1)}</span>`:''}<span class="record-badge" style="margin-left:auto;">${p.wins}-${p.losses}</span></div>`).join('')}</div>`;
+    const body = `<div class="next-card-players">${four.map(p=>`<div class="next-player">${p.name}${((IS_ADMIN||IS_OPERATOR) && p.skill)?`<span class="skill-tag">${p.skill.toFixed(1)}</span>`:''}<span class="record-badge" style="margin-left:auto;">${p.wins}-${p.losses}</span></div>`).join('')}</div>`;
     return `<div class="next-card ${(label==='Next 4'||label==='Up next')?'is-first':''}"><div class="next-card-label">${label}</div>${body}</div>`;
   };
   const nextBoardHtml = nextGroups.length
@@ -1908,6 +1927,7 @@ function render(){
       </div>
     </div>
 
+
     <section class="label">${state.courtsTitle} <button class="icon-btn" data-action="edit-courts-title" title="Edit this panel's title">✎</button></section>
     <div class="courts-grid">${courtsHtml}</div>
 
@@ -1962,7 +1982,7 @@ function render(){
             ${state.skillSeparationMode
               ? 'Separate by skill level is on: beginners (2.0-2.9), intermediate (3.0-3.9), and advanced (4.0-5.0) players are grouped with their own tier whenever there are 4 of them ready. Unrated players fold in wherever a tier is short a player. Set a rating when adding someone so they land in the right line.'
               : state.winnersLosersMode
-              ? 'Winners and losers lines are on: after each scored game, winners queue up to play winners and losers queue up to play losers. New arrivals and no-score games sit in the middle line until they get a result.'
+              ? 'Winners and losers lines are on: after each scored game, winners queue up to play winners and losers queue up to play losers. New arrivals and no-score games sit in the middle line until they get a result.' + wlStatusText
               : 'New players join the back of the line. When a court opens, the strongest and weakest of the next 4 team up against the two in the middle, so games stay close. Drag the ⠿ handle on any row to manually reorder the queue.'}
           </div>
         </div>
@@ -2005,6 +2025,28 @@ function render(){
   // no court control, settings toggles, income reports, or password changes.
   const operatorBodyHtml = `
     <div class="controls-panel">
+      <div class="control-group danger-group">
+        <span class="control-group-label">Game & session</span>
+        <div class="court-stepper">
+          <span>Courts</span>
+          <button data-action="court-minus">−</button>
+          <b>${state.courts.length}</b>
+          <button data-action="court-plus">+</button>
+        </div>
+        <button class="fill-btn" data-action="fill-all" ${fillDisabled?'disabled':''}>Fill all open courts</button>
+        <button class="reset-btn" data-action="close-day">🏁 End Game</button>
+        <button class="reset-btn" data-action="reset-scores">New round, keep players</button>
+        <button class="reset-btn" data-action="reset">Reset session</button>
+      </div>
+
+      <div class="control-group">
+        <span class="control-group-label">Queue mode</span>
+        <label class="pill-toggle"><input type="checkbox" data-action="toggle-autofill" ${state.autoFill?'checked':''}> Auto-send next group when a court opens</label>
+        <label class="pill-toggle"><input type="checkbox" data-action="toggle-balance" ${state.autoBalance?'checked':''}> Balance by games played</label>
+        <label class="pill-toggle"><input type="checkbox" data-action="toggle-wl" ${state.winnersLosersMode?'checked':''}> Winners' line & losers' line</label>
+        <label class="pill-toggle"><input type="checkbox" data-action="toggle-skill-sep" ${state.skillSeparationMode?'checked':''}> Separate by skill level</label>
+      </div>
+
       <div class="control-group">
         <span class="control-group-label">Account</span>
         <div class="spacer"></div>
@@ -2012,7 +2054,7 @@ function render(){
       </div>
     </div>
 
-    <section class="label">${state.courtsTitle}</section>
+    <section class="label">${state.courtsTitle} <button class="icon-btn" data-action="edit-courts-title" title="Edit this panel's title">✎</button></section>
     <div class="courts-grid">${courtsHtml}</div>
 
     <div class="lower-grid">
@@ -2026,6 +2068,14 @@ function render(){
       </div>
       <div>
         <section class="label">Add player</section>
+        <div style="display:flex; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
+          <button type="button" class="reset-btn" data-action="export-players">Export players</button>
+          <button type="button" class="reset-btn" data-action="import-players">Import players</button>
+          <button type="button" class="reset-btn" data-action="export-all-data">Export all data (CSV)</button>
+          <button type="button" class="reset-btn" data-action="import-all-data">Import all data (CSV)</button>
+          <input type="file" id="import-file-input" accept=".json,.csv,.txt" style="display:none">
+          <input type="file" id="import-all-data-file-input" accept=".csv,.txt" style="display:none">
+        </div>
         <datalist id="player-directory-list">
           ${directoryOptionsHtml}
         </datalist>
@@ -2058,8 +2108,8 @@ function render(){
             ${state.skillSeparationMode
               ? 'Separate by skill level is on: beginners (2.0-2.9), intermediate (3.0-3.9), and advanced (4.0-5.0) players are grouped with their own tier whenever there are 4 of them ready. Unrated players fold in wherever a tier is short a player. Set a rating when adding someone so they land in the right line.'
               : state.winnersLosersMode
-              ? 'Winners and losers lines are on: after each scored game, winners queue up to play winners and losers queue up to play losers. New arrivals and no-score games sit in the middle line until they get a result.'
-              : 'New players join the back of the line. Drag the ⠿ handle on any row to manually reorder the queue.'}
+              ? 'Winners and losers lines are on: after each scored game, winners queue up to play winners and losers queue up to play losers. New arrivals and no-score games sit in the middle line until they get a result.' + wlStatusText
+              : 'New players join the back of the line. When a court opens, the strongest and weakest of the next 4 team up against the two in the middle, so games stay close. Drag the ⠿ handle on any row to manually reorder the queue.'}
           </div>
         </div>
         <section class="label" style="font-size:16px;">Unpaid <span class="count-badge">${unpaidPlayers.length}${unpaidTotal?` · ₱${unpaidTotal}`:''}</span></section>
@@ -2110,10 +2160,10 @@ function render(){
     <div class="subtitle">Automatic, fair rotation for doubles — every group is 4 players, skill-balanced when ratings are set.
       ${IS_ADMIN ? `<span class="mode-badge is-admin">✏️ Edit Mode</span>` : IS_OPERATOR ? `<span class="mode-badge is-admin">🧑‍💼 Operator Mode</span>` : ''}
     </div>
-    ${(state.eventTitle || IS_ADMIN) ? `
+    ${(state.eventTitle || IS_ADMIN || IS_OPERATOR) ? `
     <div class="event-title-box">
       <span class="event-title-text ${state.eventTitle ? '' : 'placeholder'}">${state.eventTitle || 'Tap ✎ to set a title for today\u2019s open play'}</span>
-      ${IS_ADMIN ? `<button class="icon-btn" data-action="edit-event-title" title="Edit open play title">✎</button>` : ''}
+      ${(IS_ADMIN||IS_OPERATOR) ? `<button class="icon-btn" data-action="edit-event-title" title="Edit open play title">✎</button>` : ''}
     </div>` : ''}
     ${IS_ADMIN ? adminBodyHtml : (IS_OPERATOR ? operatorBodyHtml : playerBodyHtml)}
     ${adminLoginFabHtml}
@@ -2198,7 +2248,14 @@ setInterval(updateLiveDurations, 1000);
 const READ_ONLY_ACTIONS = new Set(['export-players','export-all-data','copy-view-link','admin-login','operator-login']);
 // Actions an Operator is allowed to perform: player/queue management only —
 // no court control, settings, reports, or password changes.
-const OPERATOR_ACTIONS = new Set(['edit','toggle-paid','toggle-paddle','toggle-gender','toggle-fee','up','down','sitout','return','remove','operator-logout']);
+// Operator gets everything except Income, Weekly Report, and Account/password actions.
+const OPERATOR_ACTIONS = new Set([
+  'edit','toggle-paid','toggle-paddle','toggle-gender','toggle-fee','up','down','sitout','return','remove','operator-logout',
+  'start','fill-all','shuffle','end','win','skip','cancel-result',
+  'edit-courts-title','edit-event-title',
+  'court-plus','court-minus','reset-scores','reset','close-day',
+  'export-players','import-players','export-all-data','import-all-data'
+]);
 
 document.addEventListener('click', (e)=>{
   const btn = e.target.closest('[data-action]');
@@ -2264,7 +2321,7 @@ document.addEventListener('click', (e)=>{
 });
 document.addEventListener('change', (e)=>{
   if(!e.target.matches('[data-action]')) return;
-  if(!IS_ADMIN){ e.target.checked = !e.target.checked; showToast('View only — ask the admin for the edit link'); return; }
+  if(!IS_ADMIN && !IS_OPERATOR){ e.target.checked = !e.target.checked; showToast('View only — ask the admin for the edit link'); return; }
   if(e.target.matches('[data-action="toggle-autofill"]')){ state.autoFill = e.target.checked; saveState(); }
   if(e.target.matches('[data-action="toggle-balance"]')){ state.autoBalance = e.target.checked; saveState(); render(); }
   if(e.target.matches('[data-action="toggle-wl"]')){
