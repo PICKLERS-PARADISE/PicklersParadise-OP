@@ -1474,6 +1474,10 @@ function moveInQueue(id, dir){
   const swapWith = idx + dir;
   if(swapWith<0 || swapWith>=state.queue.length) return;
   [state.queue[idx], state.queue[swapWith]] = [state.queue[swapWith], state.queue[idx]];
+  // A deliberate manual reorder should actually take effect, even if the next
+  // group was already locked in — the lock exists to stop *other* games from
+  // silently reshuffling things, not to block the admin's own intentional move.
+  state.nextFourReserved = null;
   saveState(); render();
 }
 
@@ -1489,6 +1493,9 @@ function reorderQueueByDrag(draggedId, targetId){
   const toIdx = state.queue.findIndex(p=>p.id===targetId);
   const insertAt = toIdx<0 ? state.queue.length : toIdx;
   state.queue.splice(insertAt, 0, item);
+  // Same as moveInQueue: a deliberate drag should actually take effect, not
+  // get silently overridden by whatever group was already locked in.
+  state.nextFourReserved = null;
   saveState(); render();
 }
 
