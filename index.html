@@ -499,7 +499,8 @@ function defaultState(){
     incomePasswordHash: DEFAULT_INCOME_HASH,
     operatorPasswordHash: DEFAULT_OPERATOR_HASH,
     playerDirectory: {},
-    lastAutoStopDate: null
+    lastAutoStopDate: null,
+    nextFourReserved: null
   };
 }
 
@@ -567,6 +568,7 @@ function migrateState(s){
   if(!s.operatorPasswordHash) s.operatorPasswordHash = DEFAULT_OPERATOR_HASH;
   if(!s.playerDirectory) s.playerDirectory = {};
   if(s.lastAutoStopDate===undefined) s.lastAutoStopDate = null;
+  if(s.nextFourReserved===undefined) s.nextFourReserved = null;
   const activePlayersForMigration = [...s.queue, ...s.courts.flatMap(c=>c.players||[])];
   const pausedPlayersForMigration = [...s.sittingOut];
   activePlayersForMigration.forEach(p=>{
@@ -796,7 +798,21 @@ function selectGroupFrom(q){
 }
 
 function selectGroup(){
-  return selectGroupFrom(orderedQueue());
+  // Once a specific group of 4 becomes "next up", lock it in. Without this,
+  // a different court's game finishing later could hand the algorithm a
+  // "better" combination (e.g. a pure winners-4 instead of a winners+newcomer
+  // mix) and silently swap out who's coming up next — which is exactly the
+  // "next 4 changed on me" bug. The reservation only breaks if someone in it
+  // actually leaves the queue (removed, sat out, etc.), in which case we
+  // recompute fresh.
+  if(state.nextFourReserved){
+    const reserved = state.nextFourReserved.map(id=> state.queue.find(p=>p.id===id)).filter(Boolean);
+    if(reserved.length===4) return {four: reserved, note:null};
+    state.nextFourReserved = null;
+  }
+  const result = selectGroupFrom(orderedQueue());
+  if(result.four) state.nextFourReserved = result.four.map(p=>p.id);
+  return result;
 }
 
 // Simulate picking the next `count` groups in a row (without touching real
@@ -805,7 +821,12 @@ function previewGroups(count){
   let working = orderedQueue();
   const groups = [];
   for(let i=0;i<count;i++){
-    const {four} = selectGroupFrom(working);
+    let four = null;
+    if(i===0 && state.nextFourReserved){
+      const reserved = state.nextFourReserved.map(id=> working.find(p=>p.id===id)).filter(Boolean);
+      if(reserved.length===4) four = reserved;
+    }
+    if(!four) four = selectGroupFrom(working).four;
     if(!four) break;
     groups.push(four);
     const ids = new Set(four.map(p=>p.id));
@@ -830,6 +851,7 @@ function autoFillOpenCourts(){
     if(!four) break;
     const ids = new Set(four.map(p=>p.id));
     state.queue = state.queue.filter(p=>!ids.has(p.id));
+    if(state.nextFourReserved && state.nextFourReserved.every(id=>ids.has(id))) state.nextFourReserved = null;
     openCourt.baseFour = assignTeams(four);
     openCourt.splitIndex = 0;
     openCourt.players = applySplit(openCourt.baseFour, 0);
@@ -848,6 +870,7 @@ function startCourt(courtId){
   if(!four){ showToast('Need 4 waiting to send in a group'); return; }
   const ids = new Set(four.map(p=>p.id));
   state.queue = state.queue.filter(p=>!ids.has(p.id));
+  if(state.nextFourReserved && state.nextFourReserved.every(id=>ids.has(id))) state.nextFourReserved = null;
   court.baseFour = assignTeams(four);
   court.splitIndex = 0;
   court.players = applySplit(court.baseFour, 0);
@@ -1520,6 +1543,7 @@ function resetScoresKeepPlayers(){
   state.courts.forEach(c=>{ c.players = null; c.startedAt = null; c.gameNum = 0; c.awaitingResult = false; });
   state.totalGamesPlayed = 0;
   state.gameDurationsMs = [];
+  state.nextFourReserved = null;
 
   saveState(); render();
   showToast('Scores reset — everyone kept their spot in line');
