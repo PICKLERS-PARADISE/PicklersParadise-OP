@@ -815,6 +815,32 @@ function previewGroups(count){
 }
 
 // ---- core actions ----
+// Fills every currently-open court it can, not just one — used whenever a
+// player enters (or re-enters) the pool somewhere other than "a game just
+// finished", since that's the one case recordResult's own auto-fill doesn't
+// cover (it only rechecks the court that just freed up).
+function autoFillOpenCourts(){
+  if(!state.autoFill) return false;
+  let filledAny = false;
+  let guard = 0; // safety cap so a logic bug can't ever loop forever
+  while(guard++ < 20){
+    const openCourt = state.courts.find(c=>!c.players);
+    if(!openCourt) break;
+    const {four} = selectGroup();
+    if(!four) break;
+    const ids = new Set(four.map(p=>p.id));
+    state.queue = state.queue.filter(p=>!ids.has(p.id));
+    openCourt.baseFour = assignTeams(four);
+    openCourt.splitIndex = 0;
+    openCourt.players = applySplit(openCourt.baseFour, 0);
+    openCourt.startedAt = Date.now();
+    openCourt.gameNum += 1;
+    openCourt.awaitingResult = false;
+    filledAny = true;
+  }
+  return filledAny;
+}
+
 function startCourt(courtId){
   const court = state.courts.find(c=>c.id===courtId);
   if(!court || court.players) return;
@@ -841,15 +867,16 @@ function shuffleTeams(courtId){
 }
 
 function fillAllCourts(){
-  let filled = 0;
-  for(const court of state.courts){
-    if(court.players) continue;
-    const {four} = selectGroup();
-    if(!four) break;
-    startCourt(court.id);
-    filled++;
-  }
-  if(filled===0) showToast('No open courts with 4 players ready');
+  const before = state.courts.filter(c=>!c.players).length;
+  const wasAutoFill = state.autoFill;
+  state.autoFill = true; // this button means "fill everything you can, right now"
+  const filledAny = autoFillOpenCourts();
+  state.autoFill = wasAutoFill;
+  if(!filledAny){ showToast('No open courts with 4 players ready'); return; }
+  const after = state.courts.filter(c=>!c.players).length;
+  const filledCount = before - after;
+  saveState(); render();
+  showToast(after>0 ? `Filled ${filledCount} court${filledCount===1?'':'s'} — ${after} still need players` : `Filled ${filledCount} court${filledCount===1?'':'s'}`);
 }
 
 function openResultPicker(courtId){
@@ -905,7 +932,7 @@ function recordResult(courtId, winnerSide){
   court.players = null; court.startedAt = null; court.awaitingResult = false;
 
   saveState();
-  if(state.autoFill) startCourt(courtId); else render();
+  if(state.autoFill){ autoFillOpenCourts(); saveState(); render(); } else render();
 }
 
 function findPlayerAnywhere(id){
@@ -944,6 +971,7 @@ function addPlayer(name, skill, feeCategory, gender){
   state.queue.push(player);
   try{ logPlayerCheckIn(name); }catch(e){ console.error('logPlayerCheckIn failed', e); }
   try{ upsertDirectory(player); }catch(e){ console.error('upsertDirectory failed', e); }
+  autoFillOpenCourts();
   saveState(); render();
 }
 
@@ -1374,6 +1402,7 @@ function importPlayers(list){
     count++;
   });
   if(!count){ showToast('No players found in that file'); return; }
+  autoFillOpenCourts();
   saveState(); render();
   showToast(`Imported ${count} player${count===1?'':'s'}`);
 }
@@ -1400,6 +1429,7 @@ function returnFromSitOut(id){
   p.joinedAt = Date.now();
   p.checkInAt = Date.now();
   state.queue.push(p);
+  autoFillOpenCourts();
   saveState(); render();
 }
 
