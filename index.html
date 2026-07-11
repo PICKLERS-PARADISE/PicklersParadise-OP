@@ -821,12 +821,12 @@ function previewGroups(count){
   let working = orderedQueue();
   const groups = [];
   for(let i=0;i<count;i++){
-    let four = null;
-    if(i===0 && state.nextFourReserved){
-      const reserved = state.nextFourReserved.map(id=> working.find(p=>p.id===id)).filter(Boolean);
-      if(reserved.length===4) four = reserved;
-    }
-    if(!four) four = selectGroupFrom(working).four;
+    // The very next group is locked via selectGroup() the instant it's first
+    // computed — this is what actually creates the reservation, so it locks
+    // in even while every court is still full (which is exactly when people
+    // are watching "Next 4"). Groups after that are just a live preview and
+    // aren't locked, since they haven't been promised yet.
+    const four = i===0 ? selectGroup().four : selectGroupFrom(working).four;
     if(!four) break;
     groups.push(four);
     const ids = new Set(four.map(p=>p.id));
@@ -1647,6 +1647,7 @@ function render(){
   }).join('');
 
   const nextGroups = previewGroups(4);
+  if(state.nextFourReserved) saveState(); // cheap no-op if nothing actually changed
   const nextGroupLabels = ['Next 4','2nd next 4','3rd next 4','4th next 4'];
   const nextBoardCard = (label, four)=>{
     const body = `<div class="next-card-players">${four.map(p=>`<div class="next-player">${p.name}${((IS_ADMIN||IS_OPERATOR) && p.skill)?`<span class="skill-tag">${p.skill.toFixed(1)}</span>`:''}<span class="record-badge" style="margin-left:auto;">${p.wins}-${p.losses}</span></div>`).join('')}</div>`;
