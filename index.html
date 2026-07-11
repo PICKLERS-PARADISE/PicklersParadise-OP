@@ -758,8 +758,23 @@ function selectGroupFrom(q){
 
     const candidates = [];
     if(neutrals.length>=4) candidates.push({four: neutrals.slice(0,4)});
-    if(winners.length>=4) candidates.push({four: winners.slice(0,4)});
-    if(losers.length>=4) candidates.push({four: losers.slice(0,4)});
+    if(winners.length>=4){
+      candidates.push({four: winners.slice(0,4)});
+    } else if(winners.length>0 && (winners.length+neutrals.length)>=4){
+      // Not enough winners alone yet — rather than let new/never-played
+      // arrivals sit stranded waiting for 3 other newcomers to show up, fold
+      // the longest-waiting of them in with the winners so everyone keeps
+      // rotating through.
+      candidates.push({four: [...winners, ...neutrals].slice(0,4)});
+    }
+    if(losers.length>=4){
+      candidates.push({four: losers.slice(0,4)});
+    } else if(losers.length>0 && (losers.length+neutrals.length)>=4){
+      // Same idea for the losers line — a newcomer who didn't fit into a
+      // winners group shouldn't have to wait around for the winners line
+      // specifically. Whichever line has room first gets them playing sooner.
+      candidates.push({four: [...losers, ...neutrals].slice(0,4)});
+    }
 
     if(candidates.length){
       // Whichever ready group contains the longest-waiting player goes next.
@@ -1982,7 +1997,7 @@ function render(){
             ${state.skillSeparationMode
               ? 'Separate by skill level is on: beginners (2.0-2.9), intermediate (3.0-3.9), and advanced (4.0-5.0) players are grouped with their own tier whenever there are 4 of them ready. Unrated players fold in wherever a tier is short a player. Set a rating when adding someone so they land in the right line.'
               : state.winnersLosersMode
-              ? 'Winners and losers lines are on: after each scored game, winners queue up to play winners and losers queue up to play losers. New arrivals and no-score games sit in the middle line until they get a result.' + wlStatusText
+              ? 'Winners and losers lines are on: after each scored game, winners queue up to play winners and losers queue up to play losers. New arrivals wait in the middle line, but if there aren\u2019t enough of them yet to form their own group, they get folded into whichever line \u2014 winners or losers \u2014 has room first, so nobody sits stranded.' + wlStatusText
               : 'New players join the back of the line. When a court opens, the strongest and weakest of the next 4 team up against the two in the middle, so games stay close. Drag the ⠿ handle on any row to manually reorder the queue.'}
           </div>
         </div>
@@ -2108,7 +2123,7 @@ function render(){
             ${state.skillSeparationMode
               ? 'Separate by skill level is on: beginners (2.0-2.9), intermediate (3.0-3.9), and advanced (4.0-5.0) players are grouped with their own tier whenever there are 4 of them ready. Unrated players fold in wherever a tier is short a player. Set a rating when adding someone so they land in the right line.'
               : state.winnersLosersMode
-              ? 'Winners and losers lines are on: after each scored game, winners queue up to play winners and losers queue up to play losers. New arrivals and no-score games sit in the middle line until they get a result.' + wlStatusText
+              ? 'Winners and losers lines are on: after each scored game, winners queue up to play winners and losers queue up to play losers. New arrivals wait in the middle line, but if there aren\u2019t enough of them yet to form their own group, they get folded into whichever line \u2014 winners or losers \u2014 has room first, so nobody sits stranded.' + wlStatusText
               : 'New players join the back of the line. When a court opens, the strongest and weakest of the next 4 team up against the two in the middle, so games stay close. Drag the ⠿ handle on any row to manually reorder the queue.'}
           </div>
         </div>
