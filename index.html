@@ -332,6 +332,9 @@ function findInDirectory(name){
 
 const ADMIN_SESSION_KEY = 'pp-admin-unlocked';
 const OPERATOR_SESSION_KEY = 'pp-operator-unlocked';
+const STOCK_SESSION_KEY = 'pp-stock-unlocked';
+let stockUnlocked = false; // once true (this tab), "Manage stock" opens without re-asking for the password
+try{ stockUnlocked = sessionStorage.getItem(STOCK_SESSION_KEY) === '1'; }catch(e){}
 
 async function resolveAdminStatus(){
   const params = new URLSearchParams(window.location.search);
@@ -1250,14 +1253,10 @@ function editVariantOptions(prefix, kind){
   showToast(`Updated ${label} for ${state[prefix+'Title']}`);
 }
 
-async function editVariantStock(prefix, key){
+// No password prompt here — access to this function is already gated by the
+// one-time password check when "Manage stock" was opened (see openStockModal).
+function editVariantStock(prefix, key){
   if(!IS_ADMIN) return;
-  const pw = prompt('Enter the income password to correct this stock number');
-  if(pw===null) return;
-  let hash;
-  try{ hash = await sha256Hex(pw); }catch(e){ showToast("Couldn't verify password on this browser"); return; }
-  if(hash !== currentIncomeHash()){ showToast('Incorrect income password — stock not changed'); return; }
-
   if(!state[prefix+'Variants']) state[prefix+'Variants'] = {};
   const current = state[prefix+'Variants'][key] || 0;
   const label = key.split('|').join(' / ');
@@ -1279,6 +1278,27 @@ function closeIncomeModal(){ showIncomeView = false; render(); }
 function closeWeeklyReport(){ showWeeklyReport = false; weeklyReportWeekOffset = 0; viewingArchiveKey = null; render(); }
 
 function closeArchiveView(){ viewingArchiveKey = null; render(); }
+
+// Asks for the income password once, the first time "Manage stock" is opened
+// this tab — after that it stays unlocked (sessionStorage) so individual
+// stock corrections and sales don't need to re-prompt every single time.
+async function openStockModal(field){
+  if(!IS_ADMIN && !IS_OPERATOR) return;
+  // Operators only ever get the "sell" form inside this modal — restocking
+  // and stock corrections are already admin-only — so there's nothing in
+  // here for them to protect with a password. Let them straight in.
+  if(IS_OPERATOR && !IS_ADMIN){ viewingStockModal = field; render(); return; }
+  if(stockUnlocked){ viewingStockModal = field; render(); return; }
+  const pw = prompt('Enter the income password to open Manage Stock');
+  if(pw===null) return;
+  let hash;
+  try{ hash = await sha256Hex(pw); }catch(e){ showToast("Couldn't verify password on this browser"); return; }
+  if(hash !== currentIncomeHash()){ showToast('Incorrect income password'); return; }
+  stockUnlocked = true;
+  try{ sessionStorage.setItem(STOCK_SESSION_KEY, '1'); }catch(e){}
+  viewingStockModal = field;
+  render();
+}
 
 function closeStockModal(){ viewingStockModal = null; render(); }
 
@@ -2131,7 +2151,7 @@ function render(){
           <tbody>${rows}</tbody>
         </table>
         <div style="font-size:12px; color:var(--muted); margin-top:10px; line-height:1.6;">
-          ${IS_ADMIN ? 'Correcting a stock number (✎) requires the income password — the same one used to correct income in the Weekly Report. Editing colors/sizes/styles doesn\'t delete stock already recorded under a removed option — it just stops showing it here.' : ''}
+          ${IS_ADMIN ? 'Editing colors/sizes/styles doesn\'t delete stock already recorded under a removed option — it just stops showing it here.' : ''}
         </div>
       </div>
     </div>`;
@@ -2750,7 +2770,7 @@ document.addEventListener('click', (e)=>{
     case 'edit-courts-title': editCourtsTitle(); break;
     case 'edit-event-title': editEventTitle(); break;
     case 'edit-shop-field': editShopField(field); break;
-    case 'open-stock-modal': viewingStockModal = field; render(); break;
+    case 'open-stock-modal': openStockModal(field); break;
     case 'close-stock-modal': viewingStockModal = null; render(); break;
     case 'toggle-paid': togglePaid(id); break;
     case 'toggle-paddle': togglePaddleRent(id); break;
