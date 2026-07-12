@@ -1280,6 +1280,8 @@ function closeWeeklyReport(){ showWeeklyReport = false; weeklyReportWeekOffset =
 
 function closeArchiveView(){ viewingArchiveKey = null; render(); }
 
+function closeStockModal(){ viewingStockModal = null; render(); }
+
 function shiftWeeklyReportWeek(delta){
   weeklyReportWeekOffset = Math.max(0, weeklyReportWeekOffset + delta);
   render();
@@ -1718,26 +1720,24 @@ function setCourtCount(n){
   saveState(); render();
 }
 
+// Deliberately an ALLOWLIST reset: only the fields listed here get cleared.
+// Everything else (player directory, daily log, archives, passwords, shop
+// content, inventory, ...) is left completely untouched by construction —
+// no "did I remember to preserve this new field" bugs, since anything not
+// explicitly named below simply isn't touched at all.
 function resetSession(){
   if(!confirm('Clear all players and courts and start a new session?')) return;
-  const keepDirectory = state.playerDirectory;
-  const keepDailyLog = state.dailyLog;
-  const keepArchives = state.sessionArchives;
-  const keepAdminHash = state.adminPasswordHash;
-  const keepIncomeHash = state.incomePasswordHash;
-  const keepOperatorHash = state.operatorPasswordHash;
-  // Shop/merch content and inventory should survive a session reset too — none
-  // of this is "today's game data", it's standing store setup.
-  const keepShop = { shopPrice: state.shopPrice, shopTagline: state.shopTagline, shopTitle: state.shopTitle, shopDesc: state.shopDesc, shopCta: state.shopCta, shopVariants: state.shopVariants, shopColors: state.shopColors, shopSizes: state.shopSizes, shopStyles: state.shopStyles,
-    gripPrice: state.gripPrice, gripTagline: state.gripTagline, gripTitle: state.gripTitle, gripDesc: state.gripDesc, gripCta: state.gripCta, gripVariants: state.gripVariants, gripColors: state.gripColors };
-  state = defaultState();
-  state.playerDirectory = keepDirectory || {};
-  state.dailyLog = keepDailyLog || {};
-  state.sessionArchives = keepArchives || {};
-  state.adminPasswordHash = keepAdminHash || DEFAULT_ADMIN_HASH;
-  state.incomePasswordHash = keepIncomeHash || DEFAULT_INCOME_HASH;
-  state.operatorPasswordHash = keepOperatorHash || DEFAULT_OPERATOR_HASH;
-  Object.assign(state, keepShop);
+  const fresh = defaultState();
+  state.queue = fresh.queue;
+  state.sittingOut = fresh.sittingOut;
+  state.courts = fresh.courts;
+  state.totalGamesPlayed = fresh.totalGamesPlayed;
+  state.gameDurationsMs = fresh.gameDurationsMs;
+  state.autoFill = fresh.autoFill;
+  state.autoBalance = fresh.autoBalance;
+  state.winnersLosersMode = fresh.winnersLosersMode;
+  state.skillSeparationMode = fresh.skillSeparationMode;
+  state.nextFourReserved = fresh.nextFourReserved;
   saveState(); render();
 }
 
@@ -2096,7 +2096,7 @@ function render(){
       <div class="modal-box" onclick="event.stopPropagation()">
         <div style="display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
           <h2>📦 ${title} — Stock</h2>
-          <button class="modal-close-btn" data-action="close-stock-modal">Close</button>
+          <button class="modal-close-btn" onclick="closeStockModal()">Close</button>
         </div>
 
         ${IS_ADMIN ? `
