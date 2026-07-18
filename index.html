@@ -504,6 +504,7 @@ async function changeOperatorPassword(){
 
 let state = null;
 let saveTimer = null;
+let localDirty = false; // true while local edits haven't landed in Firebase yet
 let showIncomeView = false;
 let showWeeklyReport = false;
 let weeklyReportWeekOffset = 0;
@@ -694,6 +695,13 @@ async function loadState(){
 
     stateRef.on('value', (snap)=>{
       if(isEditingNow()) return; // don't clobber someone mid-type
+      // CRITICAL: if we have local changes that haven't been written to
+      // Firebase yet (a save is pending or in flight), an incoming snapshot
+      // is by definition stale — applying it would silently roll back
+      // whatever was just done locally (this was the "player I added
+      // disappeared after toggling paid" bug). Local unsaved edits win;
+      // our own save will bring Firebase up to date in a moment.
+      if(localDirty) return;
       const incoming = snap.val();
       if(!incoming) return;
       const json = JSON.stringify(incoming);
@@ -713,14 +721,22 @@ async function loadState(){
 function saveState(){
   cacheLocally();
   if(!stateRef || !syncReady) return;
+  // Mark local state as ahead-of-Firebase until this write actually lands;
+  // the sync listener holds off applying any incoming (stale) snapshots
+  // while this flag is up. See the 'value' listener for the other half.
+  localDirty = true;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(()=>{
     const json = JSON.stringify(state);
-    if(json === lastSeenJSON) return;
+    if(json === lastSeenJSON){ localDirty = false; return; }
     lastSeenJSON = json;
     stateRef.set(state).then(()=>{
+      localDirty = false;
       setSyncStatus('🟢 Live — synced ' + new Date().toLocaleTimeString());
     }).catch(()=>{
+      // Keep localDirty=true on failure — our unsent changes are still ahead
+      // of the server, so stale snapshots must keep being held off. The next
+      // successful save clears it.
       setSyncStatus('🔴 Sync error — check connection');
       showToast("Couldn't sync — check connection");
     });
